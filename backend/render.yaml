@@ -1,0 +1,18 @@
+services:
+  - type: web
+    name: apni-awaaz-api
+    runtime: python
+    rootDir: backend
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: GNANI_API_KEY
+        sync: false
+      - key: CREDIT_BUDGET
+        value: "5000"
+      - key: CORS_ORIGINS
+        sync: false
+      - key: STOCK_VOICE
+        value: Shivani
+      - key: STOCK_TTS_MODEL
+        value: timbre-v3.0

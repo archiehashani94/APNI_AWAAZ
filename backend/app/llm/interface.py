@@ -1,0 +1,20 @@
+from __future__ import annotations
+
+from typing import Literal, Protocol
+
+Emotion = Literal["warm", "urgent", "playful", "calm"]
+
+
+class ReplyOption:
+    def __init__(self, text: str, emotion: Emotion) -> None:
+        self.text = text
+        self.emotion = emotion
+
+    def as_dict(self) -> dict[str, str]:
+        return {"text": self.text, "emotion": self.emotion}
+
+
+class SuggestLLM(Protocol):
+    def suggest(self, turns: list[dict[str, str]]) -> list[ReplyOption]:
+        """Return exactly 3 short replies in the partner's language/mix."""
+        ...

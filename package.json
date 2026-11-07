@@ -1,0 +1,22 @@
+{
+  "name": "apni_awaaz",
+  "version": "1.0.0",
+  "description": "Type or tap a reply. The app speaks it in a clone of your voice.",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/archiehashani94/APNI_AWAAZ.git"
+  },
+  "keywords": [
+    "1234"
+  ],
+  "author": "archie",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/archiehashani94/APNI_AWAAZ/issues"
+  },
+  "homepage": "https://github.com/archiehashani94/APNI_AWAAZ#readme"
+}
