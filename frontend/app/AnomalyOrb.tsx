@@ -115,7 +115,7 @@ export default function AnomalyOrb({ mood }: { mood: Mood }) {
     const group = new THREE.Group();
     scene.add(group);
 
-    const red = new THREE.Color(0xff4e42);
+    const accent = new THREE.Color(0xf2a93b);
 
     const outerGeometry = new THREE.IcosahedronGeometry(2, 3);
     const outerMaterial = new THREE.ShaderMaterial({
@@ -123,7 +123,7 @@ export default function AnomalyOrb({ mood }: { mood: Mood }) {
         uTime: { value: 0 },
         uAudio: { value: 0 },
         uDistortion: { value: 0.6 },
-        uColor: { value: red },
+        uColor: { value: accent },
       },
       vertexShader: /* glsl */ `
         uniform float uTime;
@@ -175,7 +175,7 @@ export default function AnomalyOrb({ mood }: { mood: Mood }) {
       uniforms: {
         uTime: { value: 0 },
         uAudio: { value: 0 },
-        uColor: { value: red },
+        uColor: { value: accent },
       },
       vertexShader: /* glsl */ `
         uniform float uAudio;
@@ -212,15 +212,15 @@ export default function AnomalyOrb({ mood }: { mood: Mood }) {
     glow.renderOrder = 1;
     group.add(glow);
 
-    // Sparse red dust, so the core sits in a field instead of a flat backdrop.
+    // Sparse gold dust, so the core sits in a field instead of a flat backdrop.
     const count = 1400;
     const positions = new Float32Array(count * 3);
     const colors = new Float32Array(count * 3);
     const sizes = new Float32Array(count);
     const palette = [
-      new THREE.Color(0xff4e42),
-      new THREE.Color(0xc2362f),
-      new THREE.Color(0xffb3ab),
+      new THREE.Color(0xf2a93b),
+      new THREE.Color(0xb97a1e),
+      new THREE.Color(0xffd79a),
     ];
     for (let i = 0; i < count; i++) {
       positions[i * 3] = (Math.random() - 0.5) * 80;
