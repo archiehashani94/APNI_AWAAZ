@@ -3,6 +3,8 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import re
+import threading
 import time
 from dataclasses import dataclass, field
 from typing import Any, AsyncIterator
@@ -10,6 +12,15 @@ from typing import Any, AsyncIterator
 import httpx
 import websockets
 
+from app.audio import (
+    repair_wav_header,
+    suppress_breaths,
+    trim_boundary_fillers,
+    trim_extra_groups,
+    trim_repeated_tail,
+    trim_trailing_silence,
+    wav_info,
+)
 from app.config import settings
 
 log = logging.getLogger("apni_awaaz.gnani")
@@ -31,6 +42,34 @@ class GnaniError(Exception):
     def __init__(self, message: str, status_code: int | None = None) -> None:
         super().__init__(message)
         self.status_code = status_code
+
+
+def upstream_error(response: httpx.Response) -> str:
+    """Extract the actionable message from a Gnani error response.
+
+    Gnani returns errors shaped like
+    {"detail": {"error_code": "INVALID_API_KEY", "message": "Unauthorized"}}.
+    Keeping that detail makes a 401 or a rejected-audio error diagnosable
+    instead of surfacing a generic "cloning failed".
+    """
+    try:
+        payload = response.json()
+    except ValueError:
+        return (response.text or "").strip()[:300]
+
+    detail = payload.get("detail") if isinstance(payload, dict) else None
+    if isinstance(detail, dict):
+        code = detail.get("error_code") or detail.get("code")
+        message = detail.get("message") or detail.get("detail")
+        if code and message:
+            return f"{code}: {message}"
+        if code or message:
+            return str(code or message)
+    if isinstance(detail, str):
+        return detail[:300]
+    if isinstance(payload, dict):
+        return str(payload.get("message") or payload.get("error") or payload)[:300]
+    return str(payload)[:300]
 
 
 @dataclass
@@ -101,6 +140,27 @@ TIMBRE_EMOTION_PREFIX = {
     "calm": "<whispers> ",
 }
 
+_TRAILING_PUNCT = ".!?;:।॥…"
+_TRAILING_BRACKETS = "\"'”’»"
+
+
+def natural_text(text: str) -> str:
+    """Clean whitespace and give short replies sentence punctuation.
+
+    TTS prosody is noticeably better when a reply ends in punctuation instead
+    of a bare word. Keep existing punctuation and closing quotes intact.
+    """
+    clean = re.sub(r"\s+", " ", text).strip()
+    if not clean:
+        return clean
+    closing = ""
+    while clean and clean[-1] in _TRAILING_BRACKETS:
+        closing = clean[-1] + closing
+        clean = clean[:-1].rstrip()
+    if clean and clean[-1] not in _TRAILING_PUNCT:
+        clean += "।" if any("\u0900" <= ch <= "\u097f" for ch in clean) else "."
+    return f"{clean}{closing}"
+
 
 class GnaniClient:
     """Single entry point for every Gnani call. Logs credits, caches TTS, enforces budget."""
@@ -109,9 +169,17 @@ class GnaniClient:
         self.ledger = CreditLedger(budget=settings.credit_budget)
         self._tts_cache: dict[str, bytes] = {}
         self._http = httpx.Client(timeout=90.0)
+        # Gnani allows only one TTS inference at a time. Serialising requests
+        # here avoids a 429 (and the wrong-voice stock fallback) when two taps
+        # overlap or a retry races the previous call.
+        self._tts_lock = threading.Lock()
 
     def _auth(self) -> dict[str, str]:
         if not settings.gnani_api_key:
+            log.error(
+                "503: GNANI_API_KEY is missing — no upstream Gnani call. "
+                "Set it in backend/.env and restart uvicorn."
+            )
             raise GnaniError("GNANI_API_KEY is not set", 503)
         return {"X-API-Key-ID": settings.gnani_api_key}
 
@@ -128,10 +196,11 @@ class GnaniClient:
         estimated: float,
         *,
         cached: bool = False,
+        failed: bool = False,
         headers: httpx.Headers | None = None,
     ) -> None:
         billed, extra = _header_credits(headers) if headers is not None else (None, {})
-        charge = 0.0 if cached else (billed if billed is not None else estimated)
+        charge = 0.0 if (cached or failed) else (billed if billed is not None else estimated)
         self.ledger.used += charge
         event = CreditEvent(
             ts=time.time(),
@@ -158,10 +227,22 @@ class GnaniClient:
         self._guard(estimated)
         files = {"audio_file": (filename, audio, content_type or "application/octet-stream")}
         url = f"{settings.gnani_base_url}/api/v1/tts/voice-clone/embeddings"
+        log.info("Gnani POST %s (voice-clone embeddings)", url)
         response = self._http.post(url, headers=self._auth(), files=files)
         self._record("voice-clone-embeddings", estimated, headers=response.headers)
         if response.status_code >= 400:
-            raise GnaniError(response.text[:500], response.status_code)
+            detail = upstream_error(response)
+            log.error(
+                "embeddings failed: POST %s status=%s detail=%s",
+                url,
+                response.status_code,
+                detail,
+            )
+            raise GnaniError(
+                f"Gnani embeddings failed ({response.status_code})"
+                + (f": {detail}" if detail else ""),
+                response.status_code,
+            )
         payload = response.json()
         data = payload.get("data") or payload
         embedding = data.get("voice_clone_embedding") or data.get("speaker_embedding") or data
@@ -183,7 +264,7 @@ class GnaniClient:
         allow_stock_fallback: bool = True,
     ) -> tuple[bytes, str, bool]:
         """Returns (wav_bytes, voice_label, used_stock_fallback). Never call from a render loop."""
-        clean = text.strip()
+        clean = natural_text(text)
         if not clean:
             raise GnaniError("Empty text", 400)
 
@@ -194,11 +275,13 @@ class GnaniClient:
             ).hexdigest()[:16]
             # Plain text: VC docs list text + model + audio_config + speaker_embedding only.
             synth_text = clean
+            sample_rate = settings.clone_tts_sample_rate
         else:
             model = settings.stock_tts_model
             voice_id = settings.stock_voice
             prefix = TIMBRE_EMOTION_PREFIX.get(emotion, "")
             synth_text = f"{prefix}{clean}" if prefix else clean
+            sample_rate = settings.stock_tts_sample_rate
 
         key = tts_cache_key(synth_text, voice_id, emotion, model)
         cached = self._tts_cache.get(key)
@@ -213,7 +296,7 @@ class GnaniClient:
             "text": synth_text,
             "model": model,
             "audio_config": {
-                "sample_rate": 24000,
+                "sample_rate": sample_rate,
                 "num_channels": 1,
                 "sample_width": 2,
                 "encoding": "linear_pcm",
@@ -232,11 +315,44 @@ class GnaniClient:
             body["speed"] = 1.0
 
         url = f"{settings.gnani_base_url}/api/v1/tts/inference"
-        response = self._http.post(url, headers={**self._auth(), "Content-Type": "application/json"}, json=body)
-        self._record("tts", estimated, headers=response.headers)
+        log.info("Gnani POST %s (tts model=%s)", url, model)
+        headers = {**self._auth(), "Content-Type": "application/json"}
+        response: httpx.Response | None = None
+        # Retry a 429 instead of instantly falling back to the stock voice. The
+        # account allows one active inference, and a short cooldown is common
+        # after a burst of taps.
+        with self._tts_lock:
+            for attempt in range(4):
+                response = self._http.post(url, headers=headers, json=body)
+                if response.status_code != 429 or attempt == 3:
+                    break
+                wait = 1.5 * (2**attempt)
+                log.warning(
+                    "TTS rate-limited (attempt %s/4); retrying in %.1fs",
+                    attempt + 1,
+                    wait,
+                )
+                time.sleep(wait)
 
-        if response.status_code >= 400 and speaker_embedding and allow_stock_fallback:
-            log.warning("clone TTS failed (%s); falling back to stock Timbre", response.status_code)
+        assert response is not None
+        self._record(
+            "tts",
+            estimated,
+            failed=response.status_code >= 400,
+            headers=response.headers,
+        )
+
+        if (
+            response.status_code >= 400
+            and speaker_embedding
+            and allow_stock_fallback
+            and response.status_code != 429
+        ):
+            log.warning(
+                "clone TTS failed status=%s detail=%s; falling back to stock Timbre",
+                response.status_code,
+                upstream_error(response),
+            )
             return self.synthesize(
                 clean,
                 speaker_embedding=None,
@@ -245,14 +361,68 @@ class GnaniClient:
                 allow_stock_fallback=False,
             )
         if response.status_code >= 400:
-            raise GnaniError(response.text[:500], response.status_code)
+            detail = upstream_error(response)
+            log.error(
+                "upstream TTS failed: POST %s status=%s model=%s detail=%s",
+                url,
+                response.status_code,
+                model,
+                detail,
+            )
+            raise GnaniError(
+                f"Gnani TTS failed ({response.status_code})"
+                + (f": {detail}" if detail else ""),
+                503 if response.status_code >= 500 else response.status_code,
+            )
 
         audio = response.content
+        repaired = repair_wav_header(audio)
+        if repaired != audio:
+            log.warning(
+                "Repaired sentinel WAV header from Gnani (%s bytes)",
+                len(audio),
+            )
+            audio = repaired
+        cleaned = suppress_breaths(audio)
+        if cleaned != audio:
+            log.info("Silenced breath noise in %s-byte TTS clip", len(audio))
+            audio = cleaned
+        trimmed = trim_extra_groups(audio, clean)
+        if trimmed != audio:
+            log.info("Removed extra speech tail from %s bytes", len(audio) - len(trimmed))
+            audio = trimmed
+        trimmed = trim_boundary_fillers(audio)
+        if trimmed != audio:
+            log.info("Removed ahh/uhh filler from %s bytes", len(audio) - len(trimmed))
+            audio = trimmed
+        trimmed = trim_repeated_tail(audio, clean)
+        if trimmed != audio:
+            log.info("Removed repeated phrase from %s bytes", len(audio) - len(trimmed))
+            audio = trimmed
+        trimmed = trim_trailing_silence(audio)
+        if trimmed != audio:
+            log.info("Trimmed TTS tail from %s to %s bytes", len(audio), len(trimmed))
+            audio = trimmed
+        info = wav_info(audio)
+        if info:
+            log.info(
+                "Gnani audio: %.2fs rate=%s channels=%s width=%s model=%s",
+                info["seconds"],
+                info["rate"],
+                info["channels"],
+                info["width"],
+                model,
+            )
         self._tts_cache[key] = audio
         return audio, voice_id, speaker_embedding is None
 
     async def prisma_stream(
-        self, pcm_iter: AsyncIterator[bytes | str]
+        self,
+        pcm_iter: AsyncIterator[bytes | str],
+        *,
+        sample_rate: int = 16000,
+        language: str = "indic-auto",
+        output_format: str = "verbatim",
     ) -> AsyncIterator[dict[str, Any]]:
         import asyncio
 
@@ -261,10 +431,15 @@ class GnaniClient:
         headers = {
             "x-api-key-id": settings.gnani_api_key,
             "model": "prisma-v3.0",
-            "language_code": "indic-auto",
-            "x-sample-rate": "16000",
-            "x-idle-timeout-sec": "300",
-            "x-min-silence-ms": "700",
+            "language_code": language,
+            "x-sample-rate": str(sample_rate),
+            "x-idle-timeout-sec": str(settings.stt_idle_timeout_sec),
+            "x-vad-threshold": str(settings.stt_vad_threshold),
+            "x-min-speech-ms": str(settings.stt_min_speech_ms),
+            "x-min-segment-ms": str(settings.stt_min_segment_ms),
+            "x-min-silence-ms": str(settings.stt_min_silence_ms),
+            "x-max-speech-s": str(settings.stt_max_speech_s),
+            "format": output_format,
         }
         self._record("stt-stream-open", estimated)
         async with websockets.connect(

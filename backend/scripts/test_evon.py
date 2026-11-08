@@ -1,4 +1,4 @@
-"""Call the LLM interface. Without EVON_CHAT_URL this should print canned fallback."""
+"""Call the LLM interface. With LLM_PROVIDER=canned this prints the canned fallback."""
 
 from __future__ import annotations
 

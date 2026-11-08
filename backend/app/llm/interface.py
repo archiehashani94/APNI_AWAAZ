@@ -15,6 +15,10 @@ class ReplyOption:
 
 
 class SuggestLLM(Protocol):
-    def suggest(self, turns: list[dict[str, str]]) -> list[ReplyOption]:
-        """Return exactly 3 short replies in the partner's language/mix."""
+    def suggest(
+        self,
+        turns: list[dict[str, str]],
+        user_gender: str | None = None,
+    ) -> list[ReplyOption]:
+        """Return up to 3 short replies in the partner's language/mix."""
         ...
