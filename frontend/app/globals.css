@@ -817,11 +817,54 @@ code {
   padding: 0.2rem 0 8rem;
 }
 
+.surface-top {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-bottom: 0.15rem;
+}
+
+/* The record entry point stays visible once a clone exists. It is the main
+   action on this screen, so give it marigold weight rather than a quiet link. */
+.record-again {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.6rem;
+  min-height: 48px;
+  padding: 0 1.15rem;
+  border: 1px solid rgba(242, 169, 59, 0.55);
+  border-radius: 999px;
+  background: rgba(242, 169, 59, 0.1);
+  color: var(--accent);
+  font-family: var(--mono);
+  font-size: 0.64rem;
+  font-weight: 400;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+.record-again:hover:not(:disabled) {
+  border-color: var(--accent);
+  background: rgba(242, 169, 59, 0.18);
+  color: var(--accent);
+  box-shadow: 0 6px 24px rgba(242, 169, 59, 0.16);
+}
+.record-again:disabled { opacity: 0.55; }
+
+.rec-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 0 3px rgba(242, 169, 59, 0.2);
+}
+
 .thread {
   display: flex;
   flex-direction: column;
   gap: 0.75rem;
-  min-height: clamp(16rem, 44vh, 32rem);
+  min-height: clamp(12rem, 32vh, 24rem);
   scroll-margin-top: 4.5rem;
 }
 

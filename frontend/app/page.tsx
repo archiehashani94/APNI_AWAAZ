@@ -449,6 +449,16 @@ export default function Home() {
     threadRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
   }
 
+  // Recording is the primary action, so it must stay reachable after a clone
+  // exists. This reuses the original enrolment screen (and its record control
+  // under the orb) instead of introducing a second recording path.
+  function startNewRecording() {
+    if (listeningRef.current) stopListen();
+    clearPreview();
+    setStage("enrol");
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+
   useEffect(() => {
     return () => {
       closingListen.current = true;
@@ -1679,6 +1689,19 @@ export default function Home() {
 
       {stage === "talk" && (
         <div className="surface">
+          <div className="surface-top">
+            <span className="surface-label">Conversation</span>
+            <button
+              type="button"
+              className="record-again"
+              onClick={startNewRecording}
+              disabled={uploading}
+            >
+              <span className="rec-dot" aria-hidden="true" />
+              Record a new voice
+            </button>
+          </div>
+          <div className="surface-divider" aria-hidden="true" />
           <section className="thread" ref={threadRef} aria-label="Conversation">
             {thread.length === 0 && !liveText.trim() ? (
               <p className="thread-empty">Partner speech will appear here.</p>
