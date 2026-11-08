@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import AnomalyOrb from "./AnomalyOrb";
 import { API_URL, api, type Emotion, type Favourite, type Reply, wsUrl } from "@/lib/api";
 import { attachAudio } from "@/lib/audioMonitor";
@@ -102,11 +102,101 @@ function getClientId(): string {
 
 type BuddyMood = "idle" | "speaking" | "listening";
 
+type Turn = { role: "partner" | "user"; text: string };
+
+function MicIcon() {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      width="20"
+      height="20"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={1.7}
+      strokeLinecap="round"
+      aria-hidden="true"
+    >
+      <rect x="9" y="3" width="6" height="10.5" rx="3" />
+      <path d="M5 11a7 7 0 0 0 14 0" />
+      <path d="M12 18v3" />
+    </svg>
+  );
+}
+
+function PlayIcon() {
+  return (
+    <svg viewBox="0 0 24 24" width="13" height="13" fill="currentColor" aria-hidden="true">
+      <path d="M8 5.4v13.2L19 12z" />
+    </svg>
+  );
+}
+
+function RefreshIcon() {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      width="18"
+      height="18"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={1.8}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M19.5 12a7.5 7.5 0 1 1-2.2-5.3" />
+      <path d="M19.5 4.5V9H15" />
+    </svg>
+  );
+}
+
+function SendIcon() {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      width="18"
+      height="18"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={1.8}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M5 12h13" />
+      <path d="M12 5l7 7-7 7" />
+    </svg>
+  );
+}
+
+function PlusIcon() {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      width="18"
+      height="18"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={1.8}
+      strokeLinecap="round"
+      aria-hidden="true"
+    >
+      <path d="M12 5v14M5 12h14" />
+    </svg>
+  );
+}
+
 /**
  * The 3D voice core sits at the centre of the page. It idles, perks up while
  * it listens, and pulses with the cloned audio while it speaks.
  */
-function VoiceCore({ mood }: { mood: BuddyMood }) {
+function VoiceCore({
+  mood,
+  action,
+}: {
+  mood: BuddyMood;
+  action?: ReactNode;
+}) {
   const line =
     mood === "speaking"
       ? "Speaking in your voice"
@@ -115,12 +205,14 @@ function VoiceCore({ mood }: { mood: BuddyMood }) {
         : "Hi, I'm your voice";
   return (
     <div className="voice-core">
-      <div className="orb-rings" aria-hidden="true">
-        <span />
-        <span />
-        <span />
+      <div className="orb-stage">
+        <div className="orb-rings" aria-hidden="true">
+          <span />
+          <span />
+          <span />
+        </div>
+        <AnomalyOrb mood={mood} />
       </div>
-      <AnomalyOrb mood={mood} />
       <div className={`equalizer ${mood}`} aria-hidden="true">
         <span />
         <span />
@@ -132,6 +224,7 @@ function VoiceCore({ mood }: { mood: BuddyMood }) {
         <span className={`status-dot ${mood}`} aria-hidden="true" />
         {line}
       </p>
+      {action}
     </div>
   );
 }
@@ -177,6 +270,9 @@ export default function Home() {
   const [savedRecordings, setSavedRecordings] = useState<SavedRecording[]>([]);
   const [savingRecording, setSavingRecording] = useState(false);
   const [recordingNote, setRecordingNote] = useState("");
+  const [thread, setThread] = useState<Turn[]>([]);
+  const [heroInView, setHeroInView] = useState(true);
+  const [favOpen, setFavOpen] = useState(false);
 
   const favourites: FavouriteItem[] = [
     ...defaultFavourites.map((item) => ({ ...item, custom: false })),
@@ -214,6 +310,7 @@ export default function Home() {
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const speakingRef = useRef(false);
   const fileInput = useRef<HTMLInputElement | null>(null);
+  const threadRef = useRef<HTMLElement | null>(null);
   const favCache = useRef<Map<string, Blob>>(new Map());
   const speechRec = useRef<BrowserRec | null>(null);
   const clockRef = useRef<HTMLSpanElement | null>(null);
@@ -334,6 +431,23 @@ export default function Home() {
     const id = window.setInterval(tick, 1000);
     return () => window.clearInterval(id);
   }, []);
+
+  // The dock only appears once the hero has scrolled away. The hero markup is
+  // observed from the outside so its component stays untouched.
+  useEffect(() => {
+    const hero = document.querySelector(".hero");
+    if (!hero || typeof IntersectionObserver === "undefined") return;
+    const observer = new IntersectionObserver(
+      ([entry]) => setHeroInView(entry.isIntersecting),
+      { threshold: 0 },
+    );
+    observer.observe(hero);
+    return () => observer.disconnect();
+  }, []);
+
+  function scrollToThread() {
+    threadRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
 
   useEffect(() => {
     return () => {
@@ -770,6 +884,21 @@ export default function Home() {
     if (lastTranscript.current.text === clean && now - lastTranscript.current.at < 1500) return false;
     lastTranscript.current = { text: clean, at: now };
     partnerTurns.current = [...partnerTurns.current, { role: "partner", text: clean }].slice(-12);
+    // Mirror the turn into render state for the chat thread. The suggestion
+    // context above still reads the ref, so its behaviour is unchanged.
+    // Progressive transcripts replace the previous partner bubble instead of
+    // stacking near-duplicates.
+    setThread((turns) => {
+      const previous = turns[turns.length - 1];
+      if (
+        previous &&
+        previous.role === "partner" &&
+        (clean.startsWith(previous.text) || previous.text.startsWith(clean))
+      ) {
+        return [...turns.slice(0, -1), { role: "partner" as const, text: clean }];
+      }
+      return [...turns, { role: "partner" as const, text: clean }].slice(-40);
+    });
     return true;
   }
 
@@ -780,6 +909,7 @@ export default function Home() {
     const last = turns[turns.length - 1];
     if (last && last.role === "user" && last.text === clean) return;
     partnerTurns.current = [...turns, { role: "user", text: clean }].slice(-12);
+    setThread((turns) => [...turns, { role: "user" as const, text: clean }].slice(-40));
   }
 
   function persistCustomFavourites(items: FavouriteItem[]) {
@@ -1256,6 +1386,76 @@ export default function Home() {
 
   const uploading = status.startsWith("Creating voice embedding");
   const mood: BuddyMood = speaking ? "speaking" : listening ? "listening" : "idle";
+  const dockVisible = stage === "talk" && !heroInView;
+
+  // The record action lives under the voice core, so the centre of the page is
+  // also the place you start and stop a take.
+  const heroAction =
+    stage === "enrol" ? (
+      <div className={`orb-action ${recState === "recording" ? "live" : ""}`}>
+        {recState === "recording" ? (
+          <button
+            type="button"
+            className="record-dot live"
+            onClick={stopRecord}
+            aria-label="Stop recording"
+          >
+            <span className="record-stop" aria-hidden="true" />
+          </button>
+        ) : (
+          <button
+            type="button"
+            className="record-dot"
+            onClick={startRecord}
+            disabled={uploading || fileBusy}
+            aria-label={previewUrl ? "Record again" : "Start recording"}
+          >
+            <span className="record-glyph" aria-hidden="true" />
+          </button>
+        )}
+        <span className="orb-action-label">
+          {recState === "recording"
+            ? `Stop · ${seconds}s`
+            : previewUrl
+              ? "Record again"
+              : "Record your voice"}
+        </span>
+      </div>
+    ) : stage === "talk" ? (
+      <div className={`orb-action ${listening ? "live" : ""}`}>
+        {listening ? (
+          <button
+            type="button"
+            className="record-dot live"
+            onClick={stopListen}
+            aria-label="Stop listening"
+          >
+            <span className="record-stop" aria-hidden="true" />
+          </button>
+        ) : (
+          <button
+            type="button"
+            className="record-dot"
+            onClick={() => {
+              void startListen();
+              scrollToThread();
+            }}
+            disabled={listenState === "connecting"}
+            aria-label="Start listening"
+          >
+            <MicIcon />
+          </button>
+        )}
+        <span className="orb-action-label">
+          {listening
+            ? "Listening · tap to stop"
+            : listenState === "connecting"
+              ? "Connecting…"
+              : "Start listening"}
+        </span>
+      </div>
+    ) : null;
+
   return (
     <main className="site">
       <div className="space-bg" aria-hidden="true" />
@@ -1298,7 +1498,7 @@ export default function Home() {
               </span>
             </div>
           </div>
-          <VoiceCore mood={mood} />
+          <VoiceCore mood={mood} action={heroAction} />
           <aside className="hero-panel" aria-label="Voice core status">
             <div className="hero-panel-title">VOICE CORE</div>
             <div className="status-item">
@@ -1367,13 +1567,6 @@ export default function Home() {
             with several speakers.
           </p>
           <div className="row">
-            {recState !== "recording" ? (
-              <button onClick={startRecord} disabled={uploading || fileBusy}>
-                {previewUrl ? "Record again" : "Record"}
-              </button>
-            ) : (
-              <button onClick={stopRecord}>Stop ({seconds}s)</button>
-            )}
             <button
               type="button"
               className="secondary"
@@ -1485,273 +1678,218 @@ export default function Home() {
       )}
 
       {stage === "talk" && (
-        <>
-          <section className="card">
-            <h2>Listen</h2>
-            <p className="lede">
-              {cloneReady
-                ? "Your cloned voice is ready."
-                : "Cloning has not succeeded, so replies currently use a stock Timbre voice."}
-            </p>
-            {qualityWarnings.length > 0 && (
-              <div className="quality">
-                <p>
-                  <strong>
-                    Reference audio check{qualityScore !== null ? ` · ${qualityScore}/100` : ""}
-                  </strong>
-                  {" — "}the clone may not match you closely because:
-                </p>
-                <ul>
-                  {qualityWarnings.map((warning) => (
-                    <li key={warning}>{warning}</li>
-                  ))}
-                </ul>
-                <button
-                  className="secondary"
-                  onClick={() => {
-                    clearPreview();
-                    setStage("enrol");
-                  }}
-                >
-                  Record a better sample
-                </button>
-              </div>
+        <div className="surface">
+          <section className="thread" ref={threadRef} aria-label="Conversation">
+            {thread.length === 0 && !liveText.trim() ? (
+              <p className="thread-empty">Partner speech will appear here.</p>
+            ) : (
+              <ol className="bubbles">
+                {thread.map((turn, index) =>
+                  turn.role === "partner" ? (
+                    <li className="bubble partner" key={`${turn.role}-${index}`}>
+                      {turn.text}
+                    </li>
+                  ) : (
+                    <li className="bubble mine" key={`${turn.role}-${index}`}>
+                      <button
+                        type="button"
+                        className="bubble-replay"
+                        disabled={speaking}
+                        onClick={() => speakText(turn.text, emotion, false)}
+                        aria-label={`Replay in your voice: ${turn.text}`}
+                      >
+                        <span>{turn.text}</span>
+                        <PlayIcon />
+                      </button>
+                    </li>
+                  ),
+                )}
+                {liveText.trim() &&
+                thread[thread.length - 1]?.text !== liveText.trim() ? (
+                  <li className="bubble partner live">{liveText.trim()}</li>
+                ) : null}
+              </ol>
             )}
-            <div className="row" style={{ marginBottom: "0.8rem" }}>
-              {cloneReady && (
-                <button
-                  className="secondary"
-                  disabled={speaking}
-                  onClick={() =>
-                    speakText(
-                      "Hello, this is a test of my cloned voice. Does it sound like the person you recorded?",
-                      emotion,
-                      false,
-                    )
-                  }
-                >
-                  {speaking ? "Testing…" : "Test this voice"}
-                </button>
-              )}
-              <button
-                className="secondary"
-                onClick={() => {
-                  clearPreview();
-                  setStage("enrol");
-                }}
-              >
-                {voiceIssue && !cloneReady ? "Open voice setup" : "Record voice again"}
-              </button>
-            </div>
-            {cloneReady && (
-              <p className="meter">
-                Recording a new sample replaces this cloned voice for the session.
-              </p>
-            )}
-            {!cloneReady && voiceIssue && (
-              <p className="meter">
-                Voice cloning is blocked by the backend API key. Fix{" "}
-                <code>GNANI_API_KEY</code> in <code>backend/.env</code> and restart the
-                backend — recording again will fail until then.
-              </p>
-            )}
-            <div className="row">
-              <label className="field">
-                Listener language
-                <select value={listenLang} onChange={(e) => setListenLang(e.target.value)}>
-                  <option value="indic-auto">Auto (Indian languages)</option>
-                  <option value="hi-IN">Hindi</option>
-                  <option value="en-IN">English</option>
-                  <option value="hi-IN,en-IN">Hindi + English</option>
-                  <option value="bn-IN">Bengali</option>
-                  <option value="ta-IN">Tamil</option>
-                  <option value="te-IN">Telugu</option>
-                  <option value="mr-IN">Marathi</option>
-                  <option value="gu-IN">Gujarati</option>
-                  <option value="kn-IN">Kannada</option>
-                  <option value="ml-IN">Malayalam</option>
-                  <option value="pa-IN">Punjabi</option>
-                </select>
-              </label>
-              {!listening ? (
-                <button onClick={startListen} disabled={listenState === "connecting"}>
-                  {listenState === "connecting" ? "Connecting…" : "Start listening"}
-                </button>
-              ) : (
-                <button className="secondary" onClick={stopListen}>
-                  Stop listening
-                </button>
-              )}
-            </div>
-            <p className="meter">
+            <p className="thread-status" role="status" aria-live="polite">
               {listenState === "connecting"
                 ? "Connecting to Prisma…"
-                : listenState === "live"
-                  ? "Live · Prisma v3.0"
-                  : listenState === "fallback"
-                    ? "Browser speech fallback is active"
-                    : status}
-            </p>
-            <p className="transcript" aria-live="polite">
-              {liveText || "Partner speech will appear here."}
+                : listenState === "fallback"
+                  ? "Browser speech fallback is active"
+                  : status || (listenState === "live" ? "Listening · Prisma v3.0" : "")}
             </p>
           </section>
 
-          <section className="card">
-            <div className="row" style={{ justifyContent: "space-between", alignItems: "center" }}>
-              <h2>Suggest</h2>
-              <button className="secondary" onClick={() => void loadSuggestions()}>
-                Refresh
+          <div className="surface-divider" aria-hidden="true" />
+
+          <section className="surface-block" aria-label="Suggestions">
+            <div className="block-head">
+              <span className="surface-label">Suggestions</span>
+              <button
+                type="button"
+                className="icon-btn"
+                onClick={() => void loadSuggestions()}
+                aria-label="Refresh suggestions"
+                title="Refresh suggestions"
+              >
+                <RefreshIcon />
               </button>
             </div>
-            <div className="row">
-              {replies.map((r) => (
-                <button
-                  className="option"
-                  key={r.text}
-                  disabled={speaking}
-                  onClick={() => speakText(r.text, r.emotion)}
-                >
-                  <small>{r.emotion}</small>
-                  {r.text}
-                </button>
-              ))}
-            </div>
-            <div className="row" style={{ marginTop: "0.8rem", alignItems: "flex-end" }}>
-              <label className="field">
-                Reply as
-                <select
-                  value={userGender}
-                  onChange={(e) => {
-                    const value = e.target.value as "neutral" | "female" | "male";
-                    setUserGender(value);
-                    userGenderRef.current = value;
-                    try {
-                      localStorage.setItem(USER_GENDER_KEY, value);
-                    } catch {
-                      /* private mode */
-                    }
-                  }}
-                >
-                  <option value="neutral">Not set</option>
-                  <option value="female">Female</option>
-                  <option value="male">Male</option>
-                </select>
-              </label>
-              <span className="meter">
-                Keeps Hindi/Hinglish verb forms right. Saved in this browser.
-              </span>
-            </div>
-          </section>
-
-          <section className="card">
-            <h2>Speak</h2>
-            <textarea
-              value={draft}
-              onChange={(e) => setDraft(e.target.value)}
-              placeholder="Type your own reply"
-            />
-            <div className="row" style={{ marginTop: "0.7rem" }}>
-              <label className="field">
-                Language
-                <select value={speakLang} onChange={(e) => setSpeakLang(e.target.value)}>
-                  <option value="auto">Auto</option>
-                  <option value="en-IN">English</option>
-                  <option value="hi-IN">Hindi</option>
-                  <option value="hi-en">Hinglish</option>
-                  <option value="bn-IN">Bengali</option>
-                  <option value="ta-IN">Tamil</option>
-                  <option value="te-IN">Telugu</option>
-                  <option value="mr-IN">Marathi</option>
-                  <option value="gu-IN">Gujarati</option>
-                  <option value="kn-IN">Kannada</option>
-                  <option value="ml-IN">Malayalam</option>
-                  <option value="pa-IN">Punjabi</option>
-                </select>
-              </label>
-              {(["warm", "urgent", "playful", "calm"] as Emotion[]).map((e) => (
-                <button
-                  key={e}
-                  className="secondary"
-                  onClick={() => setEmotion(e)}
-                  style={{ outline: emotion === e ? "2px solid var(--accent-2)" : undefined }}
-                >
-                  {e}
-                </button>
-              ))}
-              <button disabled={speaking || !draft.trim()} onClick={() => speakText(draft, emotion)}>
-                {speaking ? "Speaking…" : "Speak"}
-              </button>
-            </div>
-            <p className="ai">Cloned audio is AI-generated.</p>
-          </section>
-
-          <section className="card">
-            <div className="row" style={{ justifyContent: "space-between", alignItems: "center" }}>
-              <h2>Favourites</h2>
-              <span className="meter">Tap to speak</span>
-            </div>
-            <div className="fav-grid">
-              {favourites.map((f) => (
-                <div className="fav-item" key={f.id}>
+            <div className="chip-scroll">
+              {replies.length === 0 ? (
+                <p className="chip-empty">
+                  No suggestions yet — start listening, then tap refresh.
+                </p>
+              ) : (
+                replies.map((r) => (
                   <button
-                    className="fav"
+                    type="button"
+                    className="chip"
+                    key={r.text}
+                    disabled={speaking}
+                    onClick={() => speakText(r.text, r.emotion)}
+                  >
+                    <span className="chip-tone">{r.emotion}</span>
+                    {r.text}
+                  </button>
+                ))
+              )}
+            </div>
+          </section>
+
+          <div className="surface-divider" aria-hidden="true" />
+
+          <section className="surface-block" aria-label="Favourites">
+            <div className="block-head">
+              <span className="surface-label">Favourites</span>
+              <button
+                type="button"
+                className="icon-btn"
+                onClick={() => setFavOpen((open) => !open)}
+                aria-label={favOpen ? "Close the favourite editor" : "Add or remove favourites"}
+                aria-expanded={favOpen}
+                title={favOpen ? "Close the favourite editor" : "Add or remove favourites"}
+              >
+                <PlusIcon />
+              </button>
+            </div>
+            <div className="chip-scroll">
+              {favourites.map((f) => (
+                <span className="chip-wrap" key={f.id}>
+                  <button
+                    type="button"
+                    className="chip chip-plain"
                     disabled={speaking}
                     onClick={() => playFavourite(f)}
                   >
                     {f.text}
                   </button>
-                  {f.custom && (
+                  {f.custom && favOpen ? (
                     <button
                       type="button"
-                      className="fav-remove"
+                      className="chip-remove"
                       aria-label={`Remove ${f.text} from favourites`}
                       title="Remove"
                       onClick={() => removeCustomFavourite(f.id)}
                     >
                       ×
                     </button>
-                  )}
-                </div>
+                  ) : null}
+                </span>
               ))}
             </div>
-            <div className="fav-add">
-              <input
-                value={favText}
-                onChange={(e) => setFavText(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") {
-                    e.preventDefault();
-                    addCustomFavourite();
-                  }
-                }}
-                placeholder="Add your own words or phrase"
-                maxLength={80}
-                aria-label="New favourite phrase"
-              />
-              <select
-                value={favEmotion}
-                onChange={(e) => setFavEmotion(e.target.value as Emotion)}
-                aria-label="Emotion for the new phrase"
-              >
-                <option value="warm">warm</option>
-                <option value="calm">calm</option>
-                <option value="urgent">urgent</option>
-                <option value="playful">playful</option>
-              </select>
-              <button
-                className="secondary"
-                onClick={addCustomFavourite}
-                disabled={!favText.trim()}
-              >
-                Add
-              </button>
-            </div>
-            <p className="meter">
-              Add anything you say often. Custom phrases are saved in this browser.
-            </p>
+            {favOpen && (
+              <div className="fav-edit">
+                <input
+                  value={favText}
+                  onChange={(e) => setFavText(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      e.preventDefault();
+                      addCustomFavourite();
+                    }
+                  }}
+                  placeholder="Add your own words or phrase"
+                  maxLength={80}
+                  aria-label="New favourite phrase"
+                />
+                <select
+                  value={favEmotion}
+                  onChange={(e) => setFavEmotion(e.target.value as Emotion)}
+                  aria-label="Tone for the new phrase"
+                >
+                  <option value="warm">warm</option>
+                  <option value="calm">calm</option>
+                  <option value="urgent">urgent</option>
+                  <option value="playful">playful</option>
+                </select>
+                <button
+                  type="button"
+                  className="chip-add"
+                  onClick={addCustomFavourite}
+                  disabled={!favText.trim()}
+                >
+                  Add
+                </button>
+              </div>
+            )}
           </section>
-        </>
+
+          {dockVisible && (
+            <div className="dock" role="region" aria-label="Reply dock">
+              <div className="dock-inner">
+                <button
+                  type="button"
+                  className={`dock-mic ${listening ? "live" : ""}`}
+                  onClick={listening ? stopListen : startListen}
+                  disabled={!listening && listenState === "connecting"}
+                  aria-label={listening ? "Stop listening" : "Start listening"}
+                  title={listening ? "Stop listening" : "Start listening"}
+                >
+                  {listening ? (
+                    <span className="dock-stop" aria-hidden="true" />
+                  ) : (
+                    <MicIcon />
+                  )}
+                </button>
+                <input
+                  className="dock-input"
+                  value={draft}
+                  onChange={(e) => setDraft(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" && draft.trim() && !speaking) {
+                      e.preventDefault();
+                      void speakText(draft, emotion);
+                    }
+                  }}
+                  placeholder="Type a reply"
+                  aria-label="Your reply"
+                />
+                <span className="dock-tone">
+                  <select
+                    value={emotion}
+                    onChange={(e) => setEmotion(e.target.value as Emotion)}
+                    aria-label="Tone"
+                  >
+                    <option value="warm">warm</option>
+                    <option value="urgent">urgent</option>
+                    <option value="playful">playful</option>
+                    <option value="calm">calm</option>
+                  </select>
+                </span>
+                <button
+                  type="button"
+                  className="dock-send"
+                  disabled={speaking || !draft.trim()}
+                  onClick={() => void speakText(draft, emotion)}
+                  aria-label="Speak this reply"
+                  title="Speak this reply"
+                >
+                  <SendIcon />
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
       )}
       </div>
     </main>
