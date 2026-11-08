@@ -1,7 +1,9 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import AnomalyOrb from "./AnomalyOrb";
 import { API_URL, api, type Emotion, type Favourite, type Reply, wsUrl } from "@/lib/api";
+import { attachAudio } from "@/lib/audioMonitor";
 import {
   analyzeSample,
   downsample,
@@ -98,6 +100,51 @@ function getClientId(): string {
   return id;
 }
 
+type BuddyMood = "idle" | "speaking" | "listening";
+
+/**
+ * The 3D voice core is the assistant: it idles, perks up while it listens,
+ * and pulses with the cloned audio while it speaks. The readout underneath
+ * always says what it is doing.
+ */
+function VoiceCore({ mood }: { mood: BuddyMood }) {
+  const tag =
+    mood === "speaking" ? "OUTPUT" : mood === "listening" ? "INPUT" : "STANDBY";
+  const line =
+    mood === "speaking"
+      ? "Speaking in your voice…"
+      : mood === "listening"
+        ? "I'm all ears…"
+        : "Hi, I'm your voice";
+  return (
+    <div className="voice-core">
+      <div className={`scanner-frame ${mood}`}>
+        <span className="corner corner-tl" aria-hidden="true" />
+        <span className="corner corner-tr" aria-hidden="true" />
+        <span className="corner corner-bl" aria-hidden="true" />
+        <span className="corner corner-br" aria-hidden="true" />
+        <span className="pulse-ring" aria-hidden="true" />
+        <span className="pulse-ring delay" aria-hidden="true" />
+        <AnomalyOrb mood={mood} />
+        <span className="scan-line" aria-hidden="true" />
+      </div>
+      <div className="scanner-ids" aria-hidden="true">
+        <span>VOICE.CORE({`{STATUS:'${tag}'}`})</span>
+        <span>SIG.0x4F2E</span>
+      </div>
+      <div className="core-readout" role="status" aria-live="polite">
+        <span className={`status-dot ${mood}`} aria-hidden="true" />
+        <span className="core-status">{tag}</span>
+        <span className="core-sep" aria-hidden="true">
+          /
+        </span>
+        <span className="core-line">{line}</span>
+        <span className="caret" aria-hidden="true" />
+      </div>
+    </div>
+  );
+}
+
 export default function Home() {
   const [sessionId, setSessionId] = useState("");
   const [stage, setStage] = useState<Stage>("consent");
@@ -178,6 +225,7 @@ export default function Home() {
   const fileInput = useRef<HTMLInputElement | null>(null);
   const favCache = useRef<Map<string, Blob>>(new Map());
   const speechRec = useRef<BrowserRec | null>(null);
+  const clockRef = useRef<HTMLSpanElement | null>(null);
 
   const addFallback = useCallback((kind: string) => {
     setFallbacks((prev) => (prev.includes(kind) ? prev : [...prev, kind]));
@@ -283,6 +331,17 @@ export default function Home() {
       setUserGender(saved);
       userGenderRef.current = saved;
     }
+  }, []);
+
+  useEffect(() => {
+    const tick = () => {
+      if (!clockRef.current) return;
+      const now = new Date();
+      clockRef.current.textContent = `TIME ${now.toLocaleTimeString("en-GB", { hour12: false })}`;
+    };
+    tick();
+    const id = window.setInterval(tick, 1000);
+    return () => window.clearInterval(id);
   }, []);
 
   useEffect(() => {
@@ -1151,7 +1210,14 @@ export default function Home() {
         finish(resolve);
       };
       audio.src = url;
-      audio.play().catch((err) => finish(() => reject(err)));
+      // Route the clip through the shared analyser so the 3D voice core
+      // reacts to the real audio. If it is unavailable, play normally.
+      void attachAudio(audio)
+        .catch(() => false)
+        .then(() => {
+          if (settled) return;
+          audio.play().catch((err) => finish(() => reject(err)));
+        });
     });
   }
 
@@ -1198,14 +1264,47 @@ export default function Home() {
   }
 
   const uploading = status.startsWith("Creating voice embedding");
+  const mood: BuddyMood = speaking ? "speaking" : listening ? "listening" : "idle";
   return (
-    <main className="wrap">
-      <div className="brand">APNI AWAAZ</div>
-      <h1>Give your voice back</h1>
-      <p className="lede">
-        Type or tap a reply. The app speaks it in a clone of your voice.
-      </p>
-      <div className="row" style={{ marginBottom: "1rem" }}>
+    <main className="site">
+      <div className="space-bg" aria-hidden="true" />
+      <div className="grid-overlay" aria-hidden="true" />
+      <div className="wrap">
+        <div className="topbar">
+          <span className="topbar-brand">
+            <strong>APNI AWAAZ</strong>
+            <span className="topbar-slash"> // </span>
+            VOICE SYNTHESIS
+          </span>
+          <span className="topbar-mid">
+            TIMBRE.ENGINE v1.0 · {cloneReady ? "CLONE ONLINE" : "AWAITING SAMPLE"}
+          </span>
+          <span ref={clockRef} className="topbar-time">
+            TIME --:--:--
+          </span>
+        </div>
+        <header className="hero">
+          <VoiceCore mood={mood} />
+          <div className="hero-copy">
+            <span className="brand">
+              APNI AWAAZ<span className="brand-slash"> //</span> VOICE CLONE
+            </span>
+            <h1>Give your voice back</h1>
+            <p className="lede">
+              Type or tap a reply. The core speaks it in a clone of your voice.
+            </p>
+            <div className="hero-meta">
+              <span className={`meta ${cloneReady ? "good" : ""}`}>
+                {cloneReady ? "CLONE READY" : "CLONE PENDING"}
+              </span>
+              <span className="meta">
+                {listenState === "live" ? "INPUT LIVE" : "INPUT IDLE"}
+              </span>
+              <span className="meta">GNANI // TIMBRE</span>
+            </div>
+          </div>
+        </header>
+        <div className="row" style={{ marginBottom: "1rem" }}>
         {aiLabel && <span className="badge">AI-generated audio</span>}
         {fallbacks.map((f) => (
           <span className="badge warn" key={f}>
@@ -1635,7 +1734,7 @@ export default function Home() {
           </section>
         </>
       )}
-
+      </div>
     </main>
   );
 }
