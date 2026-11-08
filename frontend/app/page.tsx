@@ -327,6 +327,7 @@ export default function Home() {
   const [activeVoiceId, setActiveVoiceId] = useState<string | null>(null);
   const [voiceMenuOpen, setVoiceMenuOpen] = useState(false);
   const [voiceBusy, setVoiceBusy] = useState<string | null>(null);
+  const [voiceError, setVoiceError] = useState("");
   const [savingRecording, setSavingRecording] = useState(false);
   const [recordingNote, setRecordingNote] = useState("");
   const [thread, setThread] = useState<Turn[]>([]);
@@ -544,17 +545,31 @@ export default function Home() {
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
 
-  async function selectVoice(voice: SavedVoice) {
-    if (!sessionId || voiceBusy) return;
+  async function selectVoice(voice: SavedVoice, goToTalk = false) {
+    if (voiceBusy) return;
+    if (!sessionId) {
+      setVoiceError(
+        "The session is still starting. Wait a moment, then tap the voice again.",
+      );
+      return;
+    }
     setVoiceBusy(voice.id);
     setError("");
+    setVoiceError("");
     try {
       const res = await api(`/api/voices/${voice.id}/use`, sessionId, {
         method: "POST",
         headers: clientId ? { "X-Client-Id": clientId } : undefined,
       });
       if (!res.ok) {
-        setError((await res.text()) || "Could not switch to that voice.");
+        let detail = "";
+        try {
+          const data: { detail?: string } = await res.json();
+          detail = data.detail || "";
+        } catch {
+          detail = "";
+        }
+        setVoiceError(detail || "Could not switch to that voice.");
         return;
       }
       voiceVersion.current += 1;
@@ -564,8 +579,9 @@ export default function Home() {
       setActiveVoiceId(voice.id);
       setVoiceMenuOpen(false);
       setStatus(`Voice switched to the ${takeLabel(voice.seconds, voice.saved_at)} clone.`);
+      if (goToTalk) setStage("talk");
     } catch {
-      setError("Could not reach the voice server. Check that the backend is running.");
+      setVoiceError("Could not reach the voice server. Check that the backend is running.");
     } finally {
       setVoiceBusy(null);
     }
@@ -577,6 +593,7 @@ export default function Home() {
     if (voiceBusy || fileBusy) return;
     setVoiceBusy(rec.name);
     setError("");
+    setVoiceError("");
     setStatus("Reading the saved take…");
     let ctx: AudioContext | null = null;
     try {
@@ -600,14 +617,14 @@ export default function Home() {
       }
       if (prepared.length / REFERENCE_RATE < 5) {
         setStatus("");
-        setError("That take is too short to clone. Record a new voice instead.");
+        setVoiceError("That take is too short to clone. Record a new voice instead.");
         return;
       }
       previewRecording.current = rec.name;
       await uploadVoice(encodeWav(prepared, REFERENCE_RATE), "voice.wav");
     } catch {
       setStatus("");
-      setError("Could not read that saved take. Record a new voice instead.");
+      setVoiceError("Could not read that saved take. Record a new voice instead.");
     } finally {
       closeAudio(ctx);
       setVoiceBusy(null);
@@ -1784,27 +1801,70 @@ export default function Home() {
             <div className="recordings">
               <p className="meter">
                 <strong>Saved recordings</strong> — every take is kept as an MP4
-                file on the server.
+                file on the server. Tap “Use this voice” to switch back to an
+                earlier take without recording again.
               </p>
+              {voiceError && (
+                <p className="voice-alert" role="alert">
+                  {voiceError}
+                </p>
+              )}
               <ul>
-                {savedRecordings.map((recording) => (
-                  <li key={recording.name}>
-                    <div className="recording-line">
-                      <span>{new Date(recording.created_at).toLocaleString()}</span>
-                      {recording.seconds ? (
-                        <span>{recording.seconds.toFixed(1)}s</span>
-                      ) : null}
-                      <a href={`${API_URL}${recording.url}`} download={recording.name}>
-                        Download MP4
-                      </a>
-                    </div>
-                    <audio
-                      controls
-                      preload="none"
-                      src={`${API_URL}${recording.url}?inline=1`}
-                    />
-                  </li>
-                ))}
+                {savedRecordings.map((recording) => {
+                  const linked =
+                    savedVoices.find((voice) => voice.recording === recording.name) ??
+                    null;
+                  const inUse = linked !== null && linked.id === activeVoiceId;
+                  return (
+                    <li key={recording.name}>
+                      <div className="recording-line">
+                        <span>{new Date(recording.created_at).toLocaleString()}</span>
+                        {recording.seconds ? (
+                          <span>{recording.seconds.toFixed(1)}s</span>
+                        ) : null}
+                        <a href={`${API_URL}${recording.url}`} download={recording.name}>
+                          Download MP4
+                        </a>
+                      </div>
+                      <audio
+                        controls
+                        preload="none"
+                        src={`${API_URL}${recording.url}?inline=1`}
+                      />
+                      {linked ? (
+                        <button
+                          type="button"
+                          className="secondary recording-use"
+                          disabled={voiceBusy !== null || uploading || inUse}
+                          onClick={() => void selectVoice(linked, true)}
+                        >
+                          {inUse
+                            ? "In use"
+                            : voiceBusy === linked.id
+                              ? "Switching…"
+                              : "Use this voice"}
+                        </button>
+                      ) : (
+                        <button
+                          type="button"
+                          className="secondary recording-use"
+                          disabled={voiceBusy !== null || uploading || fileBusy}
+                          onClick={() => void cloneFromRecording(recording)}
+                        >
+                          {voiceBusy === recording.name
+                            ? "Creating voice…"
+                            : "Clone this recording"}
+                        </button>
+                      )}
+                      {!linked && (
+                        <p className="meter recording-note">
+                          This take was never cloned. Creating a voice from it uses
+                          about 50 Gnani credits.
+                        </p>
+                      )}
+                    </li>
+                  );
+                })}
               </ul>
             </div>
           )}
@@ -1888,6 +1948,11 @@ export default function Home() {
           </div>
           {voiceMenuOpen && (
             <div className="voice-menu" id="voice-menu">
+              {voiceError && (
+                <p className="voice-alert" role="alert">
+                  {voiceError}
+                </p>
+              )}
               <p className="voice-hint">
                 {savedVoices.length + unclonedRecordings.length > 1
                   ? "Every take you have recorded is here. Switching between saved clones uses no credits."
