@@ -103,44 +103,35 @@ function getClientId(): string {
 type BuddyMood = "idle" | "speaking" | "listening";
 
 /**
- * The 3D voice core is the assistant: it idles, perks up while it listens,
- * and pulses with the cloned audio while it speaks. The readout underneath
- * always says what it is doing.
+ * The 3D voice core sits at the centre of the page. It idles, perks up while
+ * it listens, and pulses with the cloned audio while it speaks.
  */
 function VoiceCore({ mood }: { mood: BuddyMood }) {
-  const tag =
-    mood === "speaking" ? "OUTPUT" : mood === "listening" ? "INPUT" : "STANDBY";
   const line =
     mood === "speaking"
-      ? "Speaking in your voice…"
+      ? "Speaking in your voice"
       : mood === "listening"
-        ? "I'm all ears…"
+        ? "Listening to you"
         : "Hi, I'm your voice";
   return (
     <div className="voice-core">
-      <div className={`scanner-frame ${mood}`}>
-        <span className="corner corner-tl" aria-hidden="true" />
-        <span className="corner corner-tr" aria-hidden="true" />
-        <span className="corner corner-bl" aria-hidden="true" />
-        <span className="corner corner-br" aria-hidden="true" />
-        <span className="pulse-ring" aria-hidden="true" />
-        <span className="pulse-ring delay" aria-hidden="true" />
-        <AnomalyOrb mood={mood} />
-        <span className="scan-line" aria-hidden="true" />
+      <div className="orb-rings" aria-hidden="true">
+        <span />
+        <span />
+        <span />
       </div>
-      <div className="scanner-ids" aria-hidden="true">
-        <span>VOICE.CORE({`{STATUS:'${tag}'}`})</span>
-        <span>SIG.0x4F2E</span>
+      <AnomalyOrb mood={mood} />
+      <div className={`equalizer ${mood}`} aria-hidden="true">
+        <span />
+        <span />
+        <span />
+        <span />
+        <span />
       </div>
-      <div className="core-readout" role="status" aria-live="polite">
+      <p className="orb-caption" role="status" aria-live="polite">
         <span className={`status-dot ${mood}`} aria-hidden="true" />
-        <span className="core-status">{tag}</span>
-        <span className="core-sep" aria-hidden="true">
-          /
-        </span>
-        <span className="core-line">{line}</span>
-        <span className="caret" aria-hidden="true" />
-      </div>
+        {line}
+      </p>
     </div>
   );
 }
@@ -1271,27 +1262,32 @@ export default function Home() {
       <div className="grid-overlay" aria-hidden="true" />
       <div className="wrap">
         <div className="topbar">
-          <span className="topbar-brand">
-            <strong>APNI AWAAZ</strong>
-            <span className="topbar-slash"> // </span>
-            VOICE SYNTHESIS
+          <span className="logo">
+            <span className="logo-mark" aria-hidden="true" />
+            APNI AWAAZ
           </span>
-          <span className="topbar-mid">
-            TIMBRE.ENGINE v1.0 · {cloneReady ? "CLONE ONLINE" : "AWAITING SAMPLE"}
-          </span>
-          <span ref={clockRef} className="topbar-time">
-            TIME --:--:--
-          </span>
+          <div className="topbar-right">
+            <span className={`topbar-pill ${cloneReady ? "on" : ""}`}>
+              {cloneReady ? "CLONE ONLINE" : "CLONE PENDING"}
+            </span>
+            <span ref={clockRef} className="topbar-time">
+              TIME --:--:--
+            </span>
+          </div>
         </div>
         <header className="hero">
-          <VoiceCore mood={mood} />
           <div className="hero-copy">
-            <span className="brand">
-              APNI AWAAZ<span className="brand-slash"> //</span> VOICE CLONE
+            <span className="eyebrow">
+              APNI AWAAZ <i>//</i> VOICE SYNTHESIS
             </span>
-            <h1>Give your voice back</h1>
+            <h1>
+              Give your
+              <br />
+              voice back
+            </h1>
             <p className="lede">
-              Type or tap a reply. The core speaks it in a clone of your voice.
+              Type or tap a reply. The core speaks it in a clone of your voice —
+              one take, kept across restarts, no re-recording.
             </p>
             <div className="hero-meta">
               <span className={`meta ${cloneReady ? "good" : ""}`}>
@@ -1300,9 +1296,32 @@ export default function Home() {
               <span className="meta">
                 {listenState === "live" ? "INPUT LIVE" : "INPUT IDLE"}
               </span>
-              <span className="meta">GNANI // TIMBRE</span>
             </div>
           </div>
+          <VoiceCore mood={mood} />
+          <aside className="hero-panel" aria-label="Voice core status">
+            <div className="hero-panel-title">VOICE CORE</div>
+            <div className="status-item">
+              <span>Clone</span>
+              <strong>{cloneReady ? "Ready" : "Pending"}</strong>
+            </div>
+            <div className="status-item">
+              <span>Input</span>
+              <strong>{listenState === "live" ? "Live" : "Idle"}</strong>
+            </div>
+            <div className="status-item">
+              <span>Engine</span>
+              <strong>Gnani Timbre</strong>
+            </div>
+            <div className="status-item">
+              <span>Language</span>
+              <strong>{speakLang === "auto" ? "Auto" : speakLang}</strong>
+            </div>
+            <div className="status-item">
+              <span>Spend</span>
+              <strong>{credits || "—"}</strong>
+            </div>
+          </aside>
         </header>
         <div className="row" style={{ marginBottom: "1rem" }}>
         {aiLabel && <span className="badge">AI-generated audio</span>}
