@@ -34,7 +34,14 @@ export async function attachAudio(el: HTMLAudioElement): Promise<boolean> {
       analyser.connect(ctx.destination);
       bins = new Uint8Array(analyser.frequencyBinCount);
     }
-    if (ctx.state !== "running") await ctx.resume();
+    if (ctx.state !== "running") {
+      // A blocked resume would otherwise hold playback forever, so cap the
+      // wait and fall back to plain media playback.
+      await Promise.race([
+        ctx.resume(),
+        new Promise<void>((resolve) => setTimeout(() => resolve(), 1200)),
+      ]);
+    }
     if (ctx.state !== "running" || !analyser) return false;
     // Each clip uses a fresh <audio> element, so one source per element is safe.
     const source = ctx.createMediaElementSource(el);
