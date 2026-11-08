@@ -14,8 +14,14 @@ cd backend
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
-uvicorn app.main:app --reload --port 8001
+.\start.ps1
 ```
+
+`start.ps1` frees port 8001 before starting. Running `uvicorn ... --port 8001` by
+hand while a server is already up fails on Windows with
+`[WinError 10013] An attempt was made to access a socket in a way forbidden by
+its access permissions` — that means the port is in use, not that a firewall is
+blocking it.
 
 3. Frontend (second terminal):
 
