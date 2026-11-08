@@ -15,6 +15,7 @@ class Session:
     using_stock_voice: bool = False
     turns: list[dict[str, str]] = field(default_factory=list)
     favourite_audio: dict[str, bytes] = field(default_factory=dict)
+    voice_id: str | None = None
 
 
 class SessionStore:

@@ -24,7 +24,7 @@ from app.recordings import (
     save_recording,
 )
 from app.store import store
-from app.voices import load_voice, save_voice
+from app.voices import current_voice_id, list_voices, load_voice, save_voice, set_current_voice
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("apni_awaaz")
@@ -184,16 +184,21 @@ def create_session(
     x_client_id: Annotated[str | None, Header()] = None,
 ) -> dict[str, Any]:
     session = store.create()
-    embedding = load_voice(x_client_id)
+    voices = list_voices(x_client_id)
+    embedding = load_voice(x_client_id) if voices else None
     if embedding:
         session.speaker_embedding = embedding
         session.clone_ready = True
         session.consent = True
         session.using_stock_voice = False
+        saved = current_voice_id(x_client_id)
+        known = {item["id"] for item in voices}
+        session.voice_id = saved if saved in known else voices[0]["id"]
     return {
         "session_id": session.id,
         "clone_ready": session.clone_ready,
         "consent": session.consent,
+        "voice_id": session.voice_id,
     }
 
 
@@ -210,7 +215,8 @@ def read_session(
     """
     session = store.get(x_session_id or "")
     if session is None:
-        embedding = load_voice(x_client_id)
+        voices = list_voices(x_client_id)
+        embedding = load_voice(x_client_id) if voices else None
         if embedding is None:
             raise HTTPException(404, "Session not found")
         session = store.require(x_session_id)
@@ -218,11 +224,15 @@ def read_session(
         session.clone_ready = True
         session.consent = True
         session.using_stock_voice = False
+        saved = current_voice_id(x_client_id)
+        known = {item["id"] for item in voices}
+        session.voice_id = saved if saved in known else voices[0]["id"]
     return {
         "session_id": session.id,
         "consent": session.consent,
         "clone_ready": session.clone_ready,
         "using_stock_voice": session.using_stock_voice,
+        "voice_id": session.voice_id,
     }
 
 
@@ -247,6 +257,7 @@ async def enrol(
     audio: UploadFile = File(...),
     x_session_id: Annotated[str | None, Header()] = None,
     x_client_id: Annotated[str | None, Header()] = None,
+    x_recording_name: Annotated[str | None, Header()] = None,
 ) -> dict[str, Any]:
     session = session_from(x_session_id)
     if not session.consent:
@@ -311,11 +322,23 @@ async def enrol(
         session.speaker_embedding = embedding
         session.clone_ready = True
         session.using_stock_voice = False
-        save_voice(x_client_id, embedding)
+        recording_name = (x_recording_name or "").strip()
+        if not recording_name or resolve_recording(recording_name) is None:
+            recording_name = ""
+        saved = save_voice(
+            x_client_id,
+            embedding,
+            seconds=duration,
+            recording=recording_name or None,
+        )
+        session.voice_id = saved["id"] if saved else None
+        if session.voice_id:
+            set_current_voice(x_client_id, session.voice_id)
         return {
             "ok": True,
             "clone_ready": True,
             "fallback": False,
+            "voice_id": session.voice_id,
             "duration_seconds": round(duration, 2) if duration else None,
             "quality": quality,
         }
@@ -488,6 +511,70 @@ def recording_file(name: str, inline: bool = False) -> FileResponse:
     )
 
 
+@app.get("/api/voices")
+def voices(
+    x_client_id: Annotated[str | None, Header()] = None,
+    x_session_id: Annotated[str | None, Header()] = None,
+) -> dict[str, Any]:
+    """List every clone saved for this browser, newest first.
+
+    Voices stored before the recording link existed are matched to the take
+    that was saved just before the enrolment, so the picker does not offer to
+    pay for a clone of audio that is already cloned.
+    """
+    items = list_voices(x_client_id)
+    recordings = list_recordings(x_client_id)
+    used = {item.get("recording") for item in items if item.get("recording")}
+    for item in items:
+        if item.get("recording"):
+            continue
+        candidates = [
+            rec
+            for rec in recordings
+            if rec["name"] not in used
+            and rec["created_at"] <= item["saved_at"] + 300_000
+            and item["saved_at"] - rec["created_at"] <= 7_200_000
+        ]
+        if candidates:
+            best = max(candidates, key=lambda rec: rec["created_at"])
+            item["recording"] = best["name"]
+            used.add(best["name"])
+    session = store.get(x_session_id or "")
+    for item in items:
+        if item.get("seconds") is None and item.get("recording"):
+            match = next(
+                (rec for rec in recordings if rec["name"] == item["recording"]),
+                None,
+            )
+            if match and match.get("seconds"):
+                item["seconds"] = match["seconds"]
+    return {
+        "voices": items,
+        "recordings": recordings,
+        "active": session.voice_id if session else current_voice_id(x_client_id),
+    }
+
+
+@app.post("/api/voices/{voice_id}/use")
+def use_saved_voice(
+    voice_id: str,
+    x_session_id: Annotated[str | None, Header()] = None,
+    x_client_id: Annotated[str | None, Header()] = None,
+) -> dict[str, Any]:
+    """Switch the session to an already-created clone. No Gnani credits used."""
+    session = session_from(x_session_id)
+    embedding = load_voice(x_client_id, voice_id)
+    if embedding is None:
+        raise HTTPException(404, "Saved voice not found")
+    session.speaker_embedding = embedding
+    session.clone_ready = True
+    session.using_stock_voice = False
+    session.consent = True
+    session.voice_id = voice_id
+    set_current_voice(x_client_id, voice_id)
+    return {"ok": True, "clone_ready": True, "voice_id": voice_id}
+
+
 @app.get("/api/credits")
 def credits() -> dict[str, Any]:
     return gnani.ledger.snapshot()
@@ -500,6 +587,7 @@ def demo(x_session_id: Annotated[str | None, Header()] = None) -> dict[str, Any]
     session.speaker_embedding = None
     session.clone_ready = False
     session.using_stock_voice = True
+    session.voice_id = None
     session.turns = [
         {"role": "partner", "text": "Aap theek ho? Water chahiye kya?"},
     ]

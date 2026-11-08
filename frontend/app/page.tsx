@@ -88,6 +88,25 @@ type SavedRecording = {
   bytes: number;
 };
 
+type SavedVoice = {
+  id: string;
+  saved_at: number;
+  seconds: number | null;
+  recording: string | null;
+  label: string | null;
+};
+
+function takeLabel(seconds: number | null, at: number): string {
+  const when = new Date(at).toLocaleString("en-GB", {
+    day: "numeric",
+    month: "short",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  });
+  return seconds ? `${Math.round(seconds)}s take · ${when}` : `Saved voice · ${when}`;
+}
+
 function getClientId(): string {
   let id = localStorage.getItem(CLIENT_ID_KEY);
   if (!id) {
@@ -186,6 +205,42 @@ function PlusIcon() {
   );
 }
 
+function ChevronIcon() {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      width="14"
+      height="14"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={1.9}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M6 9.5l6 6 6-6" />
+    </svg>
+  );
+}
+
+function CheckIcon() {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      width="14"
+      height="14"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={2}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M4.5 12.5l5 5 10-11" />
+    </svg>
+  );
+}
+
 /**
  * The 3D voice core sits at the centre of the page. It idles, perks up while
  * it listens, and pulses with the cloned audio while it speaks.
@@ -268,6 +323,10 @@ export default function Home() {
   const [fileNote, setFileNote] = useState("");
   const [clientId, setClientId] = useState("");
   const [savedRecordings, setSavedRecordings] = useState<SavedRecording[]>([]);
+  const [savedVoices, setSavedVoices] = useState<SavedVoice[]>([]);
+  const [activeVoiceId, setActiveVoiceId] = useState<string | null>(null);
+  const [voiceMenuOpen, setVoiceMenuOpen] = useState(false);
+  const [voiceBusy, setVoiceBusy] = useState<string | null>(null);
   const [savingRecording, setSavingRecording] = useState(false);
   const [recordingNote, setRecordingNote] = useState("");
   const [thread, setThread] = useState<Turn[]>([]);
@@ -307,6 +366,7 @@ export default function Home() {
   const voiceVersion = useRef(0);
   const audioUrl = useRef("");
   const previewUrlRef = useRef("");
+  const previewRecording = useRef("");
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const speakingRef = useRef(false);
   const fileInput = useRef<HTMLInputElement | null>(null);
@@ -318,6 +378,24 @@ export default function Home() {
   const addFallback = useCallback((kind: string) => {
     setFallbacks((prev) => (prev.includes(kind) ? prev : [...prev, kind]));
   }, []);
+
+  const loadVoices = useCallback(async () => {
+    if (!clientId) return;
+    try {
+      const res = await fetch(`${API_URL}/api/voices`, {
+        headers: {
+          "X-Client-Id": clientId,
+          ...(sessionId ? { "X-Session-Id": sessionId } : {}),
+        },
+      });
+      if (!res.ok) return;
+      const data: { voices?: SavedVoice[]; active?: string | null } = await res.json();
+      setSavedVoices(data.voices || []);
+      if (data.active) setActiveVoiceId(data.active);
+    } catch {
+      /* the picker is optional; the current clone keeps working */
+    }
+  }, [clientId, sessionId]);
 
   useEffect(() => {
     const client = getClientId();
@@ -339,12 +417,14 @@ export default function Home() {
             const info: {
               consent?: boolean;
               clone_ready?: boolean;
+              voice_id?: string | null;
             } = await check.json();
             if (info.consent) setAgreed(true);
             if (info.clone_ready) {
               setCloneReady(true);
               setStage("talk");
             }
+            if (info.voice_id) setActiveVoiceId(info.voice_id);
           }
         } catch {
           // Backend may still be waking up; keep the id and retry on use.
@@ -363,6 +443,7 @@ export default function Home() {
           setCloneReady(true);
           setStage("talk");
         }
+        if (data.voice_id) setActiveVoiceId(data.voice_id);
       }
       setSessionId(sid!);
       const fav = await fetch(`${API_URL}/api/favourites`);
@@ -390,6 +471,10 @@ export default function Home() {
       cancelled = true;
     };
   }, [clientId]);
+
+  useEffect(() => {
+    void loadVoices();
+  }, [loadVoices]);
 
   useEffect(() => {
     try {
@@ -457,6 +542,76 @@ export default function Home() {
     clearPreview();
     setStage("enrol");
     window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+
+  async function selectVoice(voice: SavedVoice) {
+    if (!sessionId || voiceBusy) return;
+    setVoiceBusy(voice.id);
+    setError("");
+    try {
+      const res = await api(`/api/voices/${voice.id}/use`, sessionId, {
+        method: "POST",
+        headers: clientId ? { "X-Client-Id": clientId } : undefined,
+      });
+      if (!res.ok) {
+        setError((await res.text()) || "Could not switch to that voice.");
+        return;
+      }
+      voiceVersion.current += 1;
+      favCache.current.clear();
+      setCloneReady(true);
+      setVoiceIssue("");
+      setActiveVoiceId(voice.id);
+      setVoiceMenuOpen(false);
+      setStatus(`Voice switched to the ${takeLabel(voice.seconds, voice.saved_at)} clone.`);
+    } catch {
+      setError("Could not reach the voice server. Check that the backend is running.");
+    } finally {
+      setVoiceBusy(null);
+    }
+  }
+
+  // Older takes are kept as MP4s. If a take was never cloned, clone it now,
+  // reusing the same cleaning and enrolment pipeline as a fresh recording.
+  async function cloneFromRecording(rec: SavedRecording) {
+    if (voiceBusy || fileBusy) return;
+    setVoiceBusy(rec.name);
+    setError("");
+    setStatus("Reading the saved take…");
+    let ctx: AudioContext | null = null;
+    try {
+      const res = await fetch(`${API_URL}${rec.url}?inline=1`);
+      if (!res.ok) throw new Error("Could not load the saved take");
+      const bytes = await res.arrayBuffer();
+      ctx = new AudioContext();
+      const decoded = await new Promise<AudioBuffer>((resolve, reject) => {
+        ctx!.decodeAudioData(bytes.slice(0), resolve, reject);
+      });
+      const channels = decoded.numberOfChannels;
+      const mono = new Float32Array(decoded.length);
+      for (let c = 0; c < channels; c++) {
+        const data = decoded.getChannelData(c);
+        for (let i = 0; i < mono.length; i++) mono[i] += data[i] / channels;
+      }
+      const reference = await resampleMono(mono, decoded.sampleRate, REFERENCE_RATE);
+      let prepared = prepareVoiceSample(reference, REFERENCE_RATE);
+      if (prepared.length / REFERENCE_RATE > 30) {
+        prepared = prepared.slice(0, REFERENCE_RATE * 30);
+      }
+      if (prepared.length / REFERENCE_RATE < 5) {
+        setStatus("");
+        setError("That take is too short to clone. Record a new voice instead.");
+        return;
+      }
+      previewRecording.current = rec.name;
+      await uploadVoice(encodeWav(prepared, REFERENCE_RATE), "voice.wav");
+    } catch {
+      setStatus("");
+      setError("Could not read that saved take. Record a new voice instead.");
+    } finally {
+      closeAudio(ctx);
+      setVoiceBusy(null);
+    }
   }
 
   useEffect(() => {
@@ -532,6 +687,7 @@ export default function Home() {
       URL.revokeObjectURL(previewUrlRef.current);
       previewUrlRef.current = "";
     }
+    previewRecording.current = "";
     setPreviewUrl("");
     setPreviewBlob(null);
     setPreviewName("voice.wav");
@@ -573,6 +729,7 @@ export default function Home() {
         saved,
         ...prev.filter((item) => item.name !== saved.name),
       ]);
+      previewRecording.current = saved.name;
       setRecordingNote("MP4 copy saved.");
     } catch (err) {
       setRecordingNote(
@@ -735,12 +892,16 @@ export default function Home() {
   async function uploadVoice(file: Blob, name: string) {
     setStatus("Creating voice embedding…");
     setError("");
+    const recording = previewRecording.current;
     try {
       const form = new FormData();
       form.append("audio", file, name);
+      const headers: Record<string, string> = {};
+      if (clientId) headers["X-Client-Id"] = clientId;
+      if (recording) headers["X-Recording-Name"] = recording;
       const res = await api("/api/enrol", sessionId, {
         method: "POST",
-        headers: clientId ? { "X-Client-Id": clientId } : undefined,
+        headers: Object.keys(headers).length ? headers : undefined,
         body: form,
       });
       const data: {
@@ -748,6 +909,7 @@ export default function Home() {
         fallback?: boolean;
         message?: string;
         detail?: string;
+        voice_id?: string | null;
         duration_seconds?: number;
         upstream_status?: number;
         quality?: { verdict?: string; score?: number; warnings?: string[] };
@@ -771,7 +933,10 @@ export default function Home() {
         voiceVersion.current += 1;
         favCache.current.clear();
         setVoiceIssue("");
+        setActiveVoiceId(data.voice_id || null);
+        setVoiceMenuOpen(false);
         clearPreview();
+        void loadVoices();
         setStatus(
           warnings.length
             ? "Clone ready, but the reference audio has problems — see the notes above the speak box."
@@ -1397,6 +1562,10 @@ export default function Home() {
   const uploading = status.startsWith("Creating voice embedding");
   const mood: BuddyMood = speaking ? "speaking" : listening ? "listening" : "idle";
   const dockVisible = stage === "talk" && !heroInView;
+  const activeVoice = savedVoices.find((voice) => voice.id === activeVoiceId) ?? null;
+  const unclonedRecordings = savedRecordings.filter(
+    (rec) => !savedVoices.some((voice) => voice.recording === rec.name),
+  );
 
   // The record action lives under the voice core, so the centre of the page is
   // also the place you start and stop a take.
@@ -1690,7 +1859,23 @@ export default function Home() {
       {stage === "talk" && (
         <div className="surface">
           <div className="surface-top">
-            <span className="surface-label">Conversation</span>
+            <button
+              type="button"
+              className={`voice-current ${voiceMenuOpen ? "open" : ""}`}
+              onClick={() => setVoiceMenuOpen((open) => !open)}
+              aria-expanded={voiceMenuOpen}
+              aria-controls="voice-menu"
+            >
+              <span className="voice-key">Voice</span>
+              <span className="voice-value">
+                {activeVoice
+                  ? takeLabel(activeVoice.seconds, activeVoice.saved_at)
+                  : cloneReady
+                    ? "Saved voice"
+                    : "Stock voice"}
+              </span>
+              <ChevronIcon />
+            </button>
             <button
               type="button"
               className="record-again"
@@ -1701,6 +1886,75 @@ export default function Home() {
               Record a new voice
             </button>
           </div>
+          {voiceMenuOpen && (
+            <div className="voice-menu" id="voice-menu">
+              <p className="voice-hint">
+                {savedVoices.length + unclonedRecordings.length > 1
+                  ? "Every take you have recorded is here. Switching between saved clones uses no credits."
+                  : "Voices are saved on this device and survive restarts."}
+              </p>
+              {savedVoices.map((voice) => {
+                const active = voice.id === activeVoiceId;
+                return (
+                  <button
+                    type="button"
+                    key={voice.id}
+                    className={`voice-row ${active ? "active" : ""}`}
+                    onClick={() => void selectVoice(voice)}
+                    disabled={voiceBusy !== null}
+                    aria-pressed={active}
+                  >
+                    <span className="voice-row-main">
+                      <span className="voice-row-title">
+                        {takeLabel(voice.seconds, voice.saved_at)}
+                      </span>
+                      <span className="voice-row-meta">
+                        {voice.recording ? "From a saved recording" : "Saved clone"}
+                      </span>
+                    </span>
+                    <span className="voice-row-act">
+                      {active ? (
+                        <>
+                          <CheckIcon /> In use
+                        </>
+                      ) : voiceBusy === voice.id ? (
+                        "Switching…"
+                      ) : (
+                        "Use"
+                      )}
+                    </span>
+                  </button>
+                );
+              })}
+              {unclonedRecordings.map((rec) => (
+                <button
+                  type="button"
+                  key={rec.name}
+                  className="voice-row"
+                  onClick={() => void cloneFromRecording(rec)}
+                  disabled={voiceBusy !== null}
+                >
+                  <span className="voice-row-main">
+                    <span className="voice-row-title">
+                      {takeLabel(rec.seconds, rec.created_at)}
+                    </span>
+                    <span className="voice-row-meta">Recording · not cloned yet</span>
+                  </span>
+                  <span className="voice-row-act">
+                    {voiceBusy === rec.name ? "Creating…" : "Create voice"}
+                  </span>
+                </button>
+              ))}
+              {savedVoices.length === 0 && unclonedRecordings.length === 0 && (
+                <p className="chip-empty">No saved voices yet. Record one to get started.</p>
+              )}
+              {unclonedRecordings.length > 0 && (
+                <p className="voice-hint">
+                  Creating a voice from a saved take uses about 50 Gnani credits.
+                </p>
+              )}
+            </div>
+          )}
           <div className="surface-divider" aria-hidden="true" />
           <section className="thread" ref={threadRef} aria-label="Conversation">
             {thread.length === 0 && !liveText.trim() ? (
