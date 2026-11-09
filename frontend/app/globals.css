@@ -114,6 +114,32 @@ button, input, textarea, select { font-family: inherit; }
   box-shadow: 0 0 14px rgba(242, 169, 59, 0.55), inset 0 0 7px rgba(242, 169, 59, 0.4);
 }
 .topbar-right { display: flex; align-items: center; gap: 0.7rem; }
+.ui-lang {
+  display: inline-flex;
+  padding: 2px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.03);
+}
+.ui-lang button {
+  padding: 0.28rem 0.55rem;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 0.55rem;
+  letter-spacing: 0.08em;
+  line-height: 1;
+  cursor: pointer;
+  transition: color 0.18s ease, background 0.18s ease;
+}
+.ui-lang button:hover { color: var(--text); }
+.ui-lang button.active {
+  color: #0c0f14;
+  background: var(--accent);
+  box-shadow: 0 0 10px rgba(242, 169, 59, 0.35);
+}
 .topbar-pill {
   padding: 0.34rem 0.62rem;
   border: 1px solid var(--line);
@@ -844,6 +870,23 @@ code {
   margin-bottom: 0.15rem;
 }
 
+.surface-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.test-voice {
+  min-height: 48px;
+  padding: 0 1.1rem;
+  font-family: var(--mono);
+  font-size: 0.62rem;
+  font-weight: 400;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
 /* The record entry point stays visible once a clone exists. It is the main
    action on this screen, so give it marigold weight rather than a quiet link. */
 .record-again {
@@ -1326,6 +1369,106 @@ code {
   box-shadow: 0 0 0 3px rgba(242, 169, 59, 0.1);
 }
 
+.dock-lang { flex: 0 0 auto; display: flex; position: relative; }
+.dock-lang select {
+  min-width: 4.6rem;
+  height: 48px;
+  padding: 0 1.5rem 0 0.55rem;
+  border-radius: 14px;
+  border: 1px solid rgba(242, 169, 59, 0.35);
+  background-color: rgba(11, 9, 6, 0.75);
+  color: var(--accent);
+  font-family: var(--mono);
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  background-position: calc(100% - 13px) 50%, calc(100% - 8px) 50%;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+.dock-lang select:hover {
+  border-color: var(--accent);
+  background-color: rgba(242, 169, 59, 0.1);
+}
+.dock-lang select:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(242, 169, 59, 0.15);
+}
+
+.listen-lang-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  padding: 0.5rem 0.8rem;
+  margin-bottom: 0.75rem;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: rgba(18, 14, 10, 0.5);
+}
+
+.listen-lang-label {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 0.72rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.listen-lang-pills {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  flex-wrap: wrap;
+}
+
+.lang-pill {
+  padding: 0.25rem 0.65rem;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.02);
+  color: var(--ink);
+  font-size: 0.76rem;
+  font-family: var(--mono);
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.lang-pill:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.lang-pill.active {
+  border-color: var(--accent);
+  background: rgba(242, 169, 59, 0.15);
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.lang-select-wrap select {
+  height: 28px;
+  padding: 0 1.4rem 0 0.5rem;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background-color: rgba(11, 9, 6, 0.65);
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 0.72rem;
+  cursor: pointer;
+}
+
+.lang-select-wrap select:hover,
+.lang-select-wrap select:focus {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
 .dock-tone { flex: 0 0 auto; display: flex; }
 .dock-tone select {
   min-width: 5.7rem;
@@ -1364,9 +1507,10 @@ code {
   .surface { padding-bottom: 7rem; }
   .bubble { max-width: 88%; font-size: 0.92rem; }
   .chip { max-width: 17rem; }
-  .dock-tone select { max-width: 5.2rem; padding-left: 0.5rem; }
-  .dock-inner { gap: 0.3rem; padding: 0.35rem; }
-  .dock-mic, .dock-send { width: 48px; height: 48px; }
+  .dock-tone select { max-width: 4.8rem; min-width: 4.4rem; padding-left: 0.4rem; }
+  .dock-lang select { max-width: 3.8rem; min-width: 3.4rem; padding-left: 0.35rem; }
+  .dock-inner { gap: 0.25rem; padding: 0.3rem; }
+  .dock-mic, .dock-send { width: 44px; height: 44px; }
 }
 
 @media (prefers-reduced-motion: reduce) {

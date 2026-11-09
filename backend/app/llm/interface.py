@@ -19,6 +19,7 @@ class SuggestLLM(Protocol):
         self,
         turns: list[dict[str, str]],
         user_gender: str | None = None,
+        language_hint: str | None = None,
     ) -> list[ReplyOption]:
         """Return up to 3 short replies in the partner's language/mix."""
         ...

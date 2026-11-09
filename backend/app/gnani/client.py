@@ -13,6 +13,7 @@ import httpx
 import websockets
 
 from app.audio import (
+    enhance_speech_clarity,
     repair_wav_header,
     suppress_breaths,
     trim_boundary_fillers,
@@ -403,6 +404,10 @@ class GnaniClient:
         if trimmed != audio:
             log.info("Trimmed TTS tail from %s to %s bytes", len(audio), len(trimmed))
             audio = trimmed
+        enhanced = enhance_speech_clarity(audio)
+        if enhanced != audio:
+            log.info("Enhanced speech clarity and normalized audio (%s bytes)", len(enhanced))
+            audio = enhanced
         info = wav_info(audio)
         if info:
             log.info(
@@ -428,10 +433,14 @@ class GnaniClient:
 
         estimated = 20.0
         self._guard(estimated)
+        # Prisma accepts exactly one locale in ``language_code``. If an older
+        # client still sends a comma list, use its first locale instead of
+        # letting the stream fail with a policy-violation error.
+        language_code = (language.split(",")[0] or "indic-auto").strip()
         headers = {
             "x-api-key-id": settings.gnani_api_key,
             "model": "prisma-v3.0",
-            "language_code": language,
+            "language_code": language_code,
             "x-sample-rate": str(sample_rate),
             "x-idle-timeout-sec": str(settings.stt_idle_timeout_sec),
             "x-vad-threshold": str(settings.stt_vad_threshold),

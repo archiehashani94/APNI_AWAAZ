@@ -16,6 +16,7 @@ import {
 type Stage = "consent" | "enrol" | "talk";
 type ListenState = "idle" | "connecting" | "live" | "fallback";
 type RecState = "idle" | "recording" | "review";
+type UiLang = "en" | "hi";
 
 const STT_RATE = 16000;
 const STT_FRAME_SAMPLES = 512; // Gnani requires exactly 1024 bytes per binary frame
@@ -79,6 +80,79 @@ type FavouriteItem = Favourite & { custom?: boolean };
 const CUSTOM_FAVOURITES_KEY = "aa_custom_favourites";
 const USER_GENDER_KEY = "aa_user_gender";
 const CLIENT_ID_KEY = "aa_client";
+const LISTEN_LANG_KEY = "aa_listen_lang";
+const UI_LANG_KEY = "aa_ui_lang";
+
+const EMOTION_LABELS: Record<Emotion, { en: string; hi: string }> = {
+  warm: { en: "warm", hi: "स्नेही" },
+  calm: { en: "calm", hi: "शांत" },
+  urgent: { en: "urgent", hi: "ज़रूरी" },
+  playful: { en: "playful", hi: "चंचल" },
+};
+
+const FALLBACK_LABELS: Record<string, { en: string; hi: string }> = {
+  stock_voice: { en: "stock voice", hi: "स्टॉक आवाज़" },
+  canned_replies: { en: "canned replies", hi: "तैयार जवाब" },
+  browser_speech: { en: "browser speech", hi: "ब्राउज़र वाक्" },
+  browser_speech_unavailable: {
+    en: "browser speech unavailable",
+    hi: "ब्राउज़र वाक् उपलब्ध नहीं",
+  },
+  demo: { en: "demo", hi: "डेमो" },
+};
+
+type ContentLang = "en" | "hi" | "hinglish";
+
+// Default phrases are localised by id; custom phrases are never rewritten.
+const FAVOURITE_TEXT: Record<string, Record<ContentLang, string>> = {
+  yes: { en: "Yes", hi: "हाँ", hinglish: "Haan" },
+  no: { en: "No", hi: "नहीं", hinglish: "Nahi" },
+  thanks: { en: "Thank you", hi: "धन्यवाद", hinglish: "Dhanyavaad" },
+  sorry: { en: "Sorry", hi: "माफ़ कीजिए", hinglish: "Maaf kijiye" },
+  wait: { en: "Please wait", hi: "कृपया रुकिए", hinglish: "Please rukiye" },
+  repeat: {
+    en: "Please repeat",
+    hi: "कृपया दोबारा कहिए",
+    hinglish: "Please dobara kahiye",
+  },
+  okay: { en: "Okay", hi: "ठीक है", hinglish: "Theek hai" },
+  help: {
+    en: "I need help",
+    hi: "मुझे मदद चाहिए",
+    hinglish: "Mujhe madad chahiye",
+  },
+  water: {
+    en: "Water please",
+    hi: "पानी दीजिए",
+    hinglish: "Paani dijiye",
+  },
+  love: {
+    en: "I love you",
+    hi: "मैं आपसे प्यार करता/करती हूँ",
+    hinglish: "Main aapse pyaar karta/karti hoon",
+  },
+  hello: { en: "Hello", hi: "नमस्ते", hinglish: "Namaste" },
+  bye: { en: "Bye", hi: "अलविदा", hinglish: "Alvida" },
+};
+
+const SUPPORTED_LANGUAGES = [
+  { code: "en-IN", label: "English", short: "EN", native: "English" },
+  { code: "hi-IN", label: "Hindi", short: "HI", native: "हिन्दी" },
+  {
+    code: "hi-en",
+    label: "Hinglish",
+    short: "HI-EN",
+    native: "हिन्दी + English",
+  },
+  { code: "ta-IN", label: "Tamil", short: "TA", native: "தமிழ்" },
+  { code: "te-IN", label: "Telugu", short: "TE", native: "తెలుగు" },
+  { code: "kn-IN", label: "Kannada", short: "KN", native: "ಕನ್ನಡ" },
+  { code: "ml-IN", label: "Malayalam", short: "ML", native: "മലയാളം" },
+  { code: "mr-IN", label: "Marathi", short: "MR", native: "मराठी" },
+  { code: "bn-IN", label: "Bengali", short: "BN", native: "বাংলা" },
+  { code: "gu-IN", label: "Gujarati", short: "GU", native: "ગુજરાતી" },
+  { code: "pa-IN", label: "Punjabi", short: "PA", native: "ਪੰਜਾਬੀ" },
+];
 
 type SavedRecording = {
   name: string;
@@ -96,15 +170,20 @@ type SavedVoice = {
   label: string | null;
 };
 
-function takeLabel(seconds: number | null, at: number): string {
-  const when = new Date(at).toLocaleString("en-GB", {
+function takeLabel(seconds: number | null, at: number, lang: UiLang = "en"): string {
+  const when = new Date(at).toLocaleString(lang === "hi" ? "hi-IN" : "en-GB", {
     day: "numeric",
     month: "short",
     hour: "2-digit",
     minute: "2-digit",
     hour12: false,
   });
-  return seconds ? `${Math.round(seconds)}s take · ${when}` : `Saved voice · ${when}`;
+  if (seconds) {
+    return lang === "hi"
+      ? `${Math.round(seconds)} सेकंड का टेक · ${when}`
+      : `${Math.round(seconds)}s take · ${when}`;
+  }
+  return lang === "hi" ? `सहेजी गई आवाज़ · ${when}` : `Saved voice · ${when}`;
 }
 
 function getClientId(): string {
@@ -248,16 +327,24 @@ function CheckIcon() {
 function VoiceCore({
   mood,
   action,
+  lang = "en",
 }: {
   mood: BuddyMood;
   action?: ReactNode;
+  lang?: UiLang;
 }) {
   const line =
     mood === "speaking"
-      ? "Speaking in your voice"
+      ? lang === "hi"
+        ? "आपकी आवाज़ में बोल रहा हूँ"
+        : "Speaking in your voice"
       : mood === "listening"
-        ? "Listening to you"
-        : "Hi, I'm your voice";
+        ? lang === "hi"
+          ? "आपको सुन रहा हूँ"
+          : "Listening to you"
+        : lang === "hi"
+          ? "नमस्ते, मैं आपकी आवाज़ हूँ"
+          : "Hi, I'm your voice";
   return (
     <div className="voice-core">
       <div className="orb-stage">
@@ -309,7 +396,7 @@ export default function Home() {
   const [credits, setCredits] = useState<string>("");
   const [fallbacks, setFallbacks] = useState<string[]>([]);
   const [listenState, setListenState] = useState<ListenState>("idle");
-  const [listenLang, setListenLang] = useState("indic-auto");
+  const [listenLang, setListenLang] = useState("en-IN");
   const [speakLang, setSpeakLang] = useState("auto");
   const [userGender, setUserGender] = useState<"neutral" | "female" | "male">("neutral");
   const [recState, setRecState] = useState<RecState>("idle");
@@ -333,9 +420,36 @@ export default function Home() {
   const [thread, setThread] = useState<Turn[]>([]);
   const [heroInView, setHeroInView] = useState(true);
   const [favOpen, setFavOpen] = useState(false);
+  const [uiLang, setUiLang] = useState<UiLang>("en");
+  const [uploading, setUploading] = useState(false);
+
+  const t = (en: string, hi: string) => (uiLang === "hi" ? hi : en);
+  const emotionLabel = (emo: Emotion) =>
+    uiLang === "hi" ? EMOTION_LABELS[emo].hi : EMOTION_LABELS[emo].en;
+
+  function changeUiLang(lang: UiLang) {
+    setUiLang(lang);
+    try {
+      localStorage.setItem(UI_LANG_KEY, lang);
+    } catch {
+      /* private mode: keep the in-memory choice */
+    }
+    // Keep the partner's listening language in step with the interface
+    // language, unless the user has deliberately picked another language.
+    if (listenLang === "en-IN" || listenLang === "hi-IN") {
+      changeListenLang(lang === "hi" ? "hi-IN" : "en-IN");
+    }
+  }
+
+  const contentLang: ContentLang =
+    listenLang === "hi-en" ? "hinglish" : uiLang === "hi" ? "hi" : "en";
 
   const favourites: FavouriteItem[] = [
-    ...defaultFavourites.map((item) => ({ ...item, custom: false })),
+    ...defaultFavourites.map((item) => ({
+      ...item,
+      text: FAVOURITE_TEXT[item.id]?.[contentLang] ?? item.text,
+      custom: false,
+    })),
     ...customFavourites,
   ];
 
@@ -505,18 +619,43 @@ export default function Home() {
       setUserGender(saved);
       userGenderRef.current = saved;
     }
+    const savedLang = localStorage.getItem(LISTEN_LANG_KEY);
+    // Prisma and browser SpeechRecognition each accept exactly one locale.
+    // A comma-separated value (from an older build) must never be replayed.
+    if (savedLang && !savedLang.includes(",")) {
+      setListenLang(savedLang);
+    } else if (savedLang) {
+      localStorage.removeItem(LISTEN_LANG_KEY);
+    }
   }, []);
+
+  useEffect(() => {
+    const saved = localStorage.getItem(UI_LANG_KEY);
+    if (saved === "en" || saved === "hi") {
+      setUiLang(saved);
+      // A Hindi interface should listen in Hindi by default.
+      if (saved === "hi" && !localStorage.getItem(LISTEN_LANG_KEY)) {
+        setListenLang("hi-IN");
+        localStorage.setItem(LISTEN_LANG_KEY, "hi-IN");
+      }
+    }
+  }, []);
+
+  useEffect(() => {
+    document.documentElement.lang = uiLang === "hi" ? "hi" : "en";
+  }, [uiLang]);
 
   useEffect(() => {
     const tick = () => {
       if (!clockRef.current) return;
       const now = new Date();
-      clockRef.current.textContent = `TIME ${now.toLocaleTimeString("en-GB", { hour12: false })}`;
+      const prefix = uiLang === "hi" ? "समय" : "TIME";
+      clockRef.current.textContent = `${prefix} ${now.toLocaleTimeString("en-GB", { hour12: false })}`;
     };
     tick();
     const id = window.setInterval(tick, 1000);
     return () => window.clearInterval(id);
-  }, []);
+  }, [uiLang]);
 
   // The dock only appears once the hero has scrolled away. The hero markup is
   // observed from the outside so its component stays untouched.
@@ -549,7 +688,10 @@ export default function Home() {
     if (voiceBusy) return;
     if (!sessionId) {
       setVoiceError(
-        "The session is still starting. Wait a moment, then tap the voice again.",
+        t(
+          "The session is still starting. Wait a moment, then tap the voice again.",
+          "सेशन अभी शुरू हो रहा है। थोड़ा रुकें, फिर आवाज़ पर दोबारा टैप करें।",
+        ),
       );
       return;
     }
@@ -569,7 +711,7 @@ export default function Home() {
         } catch {
           detail = "";
         }
-        setVoiceError(detail || "Could not switch to that voice.");
+        setVoiceError(detail || t("Could not switch to that voice.", "उस आवाज़ पर स्विच नहीं हो सका।"));
         return;
       }
       voiceVersion.current += 1;
@@ -578,10 +720,20 @@ export default function Home() {
       setVoiceIssue("");
       setActiveVoiceId(voice.id);
       setVoiceMenuOpen(false);
-      setStatus(`Voice switched to the ${takeLabel(voice.seconds, voice.saved_at)} clone.`);
+      setStatus(
+        t(
+          `Voice switched to the ${takeLabel(voice.seconds, voice.saved_at, uiLang)} clone.`,
+          `${takeLabel(voice.seconds, voice.saved_at, uiLang)} क्लोन पर आवाज़ स्विच हो गई।`,
+        ),
+      );
       if (goToTalk) setStage("talk");
     } catch {
-      setVoiceError("Could not reach the voice server. Check that the backend is running.");
+      setVoiceError(
+        t(
+          "Could not reach the voice server. Check that the backend is running.",
+          "वॉइस सर्वर से संपर्क नहीं हो सका। जाँचें कि बैकएंड चल रहा है।",
+        ),
+      );
     } finally {
       setVoiceBusy(null);
     }
@@ -594,7 +746,7 @@ export default function Home() {
     setVoiceBusy(rec.name);
     setError("");
     setVoiceError("");
-    setStatus("Reading the saved take…");
+    setStatus(t("Reading the saved take…", "सहेजा गया टेक पढ़ रहे हैं…"));
     let ctx: AudioContext | null = null;
     try {
       const res = await fetch(`${API_URL}${rec.url}?inline=1`);
@@ -617,14 +769,24 @@ export default function Home() {
       }
       if (prepared.length / REFERENCE_RATE < 5) {
         setStatus("");
-        setVoiceError("That take is too short to clone. Record a new voice instead.");
+        setVoiceError(
+          t(
+            "That take is too short to clone. Record a new voice instead.",
+            "वह टेक क्लोन करने के लिए बहुत छोटा है। इसके बजाय नई आवाज़ रिकॉर्ड करें।",
+          ),
+        );
         return;
       }
       previewRecording.current = rec.name;
       await uploadVoice(encodeWav(prepared, REFERENCE_RATE), "voice.wav");
     } catch {
       setStatus("");
-      setVoiceError("Could not read that saved take. Record a new voice instead.");
+      setVoiceError(
+        t(
+          "Could not read that saved take. Record a new voice instead.",
+          "वह सहेजा गया टेक पढ़ा नहीं जा सका। इसके बजाय नई आवाज़ रिकॉर्ड करें।",
+        ),
+      );
     } finally {
       closeAudio(ctx);
       setVoiceBusy(null);
@@ -653,7 +815,12 @@ export default function Home() {
     try {
       const res = await api("/api/credits", sessionId);
       const data = await res.json();
-      setCredits(`${data.used} / ${data.budget} credits`);
+      setCredits(
+        t(
+          `${data.used} / ${data.budget} credits`,
+          `${data.used} / ${data.budget} क्रेडिट`,
+        ),
+      );
     } catch {
       /* credit display is non-critical */
     }
@@ -739,7 +906,7 @@ export default function Home() {
       });
       if (!res.ok) {
         const detail = await res.text();
-        throw new Error(detail || `Save failed (${res.status})`);
+        throw new Error(detail || t(`Save failed (${res.status})`, `सहेजना विफल (${res.status})`));
       }
       const saved: SavedRecording = await res.json();
       setSavedRecordings((prev) => [
@@ -747,10 +914,13 @@ export default function Home() {
         ...prev.filter((item) => item.name !== saved.name),
       ]);
       previewRecording.current = saved.name;
-      setRecordingNote("MP4 copy saved.");
+      setRecordingNote(t("MP4 copy saved.", "MP4 कॉपी सहेजी गई।"));
     } catch (err) {
       setRecordingNote(
-        `Could not save the MP4 copy: ${err instanceof Error ? err.message : String(err)}`,
+        t(
+          `Could not save the MP4 copy: ${err instanceof Error ? err.message : String(err)}`,
+          `MP4 कॉपी सहेजी नहीं जा सकी: ${err instanceof Error ? err.message : String(err)}`,
+        ),
       );
     } finally {
       setSavingRecording(false);
@@ -771,8 +941,8 @@ export default function Home() {
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: {
           channelCount: 1,
-          echoCancellation: true,
-          noiseSuppression: true,
+          echoCancellation: false,
+          noiseSuppression: false,
           autoGainControl: false,
         },
       });
@@ -818,7 +988,12 @@ export default function Home() {
       }, 1000);
     } catch {
       setRecState("idle");
-      setError("Microphone unavailable. Allow microphone access and try again.");
+      setError(
+        t(
+          "Microphone unavailable. Allow microphone access and try again.",
+          "माइक्रोफ़ोन उपलब्ध नहीं है। माइक्रोफ़ोन की अनुमति दें और दोबारा कोशिश करें।",
+        ),
+      );
     }
   }
 
@@ -849,18 +1024,29 @@ export default function Home() {
     if (rawDuration < 5) {
       setRecState("idle");
       setError(
-        `Only ${rawDuration.toFixed(1)}s recorded. Record at least 5 seconds, ideally 20–30 seconds.`,
+        t(
+          `Only ${rawDuration.toFixed(1)}s recorded. Record at least 5 seconds, ideally 20–30 seconds.`,
+          `केवल ${rawDuration.toFixed(1)} सेकंड रिकॉर्ड हुए। कम से कम 5 सेकंड, बेहतर हो 20–30 सेकंड रिकॉर्ड करें।`,
+        ),
       );
       return;
     }
     if (levelPercent(merged) < 5) {
       setRecState("idle");
-      setError("The recording is too quiet. Move closer to the microphone and record again.");
+      setError(
+        t(
+          "The recording is too quiet. Move closer to the microphone and record again.",
+          "रिकॉर्डिंग बहुत धीमी है। माइक्रोफ़ोन के पास आएँ और दोबारा रिकॉर्ड करें।",
+        ),
+      );
       return;
     }
     if (recClipped.current) {
       setError(
-        "The recording clipped (input was too loud). If the preview sounds distorted, move back and record again.",
+        t(
+          "The recording clipped (input was too loud). If the preview sounds distorted, move back and record again.",
+          "रिकॉर्डिंग क्लिप हो गई (आवाज़ बहुत तेज़ थी)। अगर प्रीव्यू विकृत लगे, थोड़ा दूर जाकर दोबारा रिकॉर्ड करें।",
+        ),
       );
     }
 
@@ -874,14 +1060,22 @@ export default function Home() {
       reference = await resampleMono(merged, recRate.current, REFERENCE_RATE);
       prepared = prepareVoiceSample(reference, REFERENCE_RATE);
     } catch {
-      setError("Could not process the recording. Stop listening and try again.");
+      setError(
+        t(
+          "Could not process the recording. Stop listening and try again.",
+          "रिकॉर्डिंग प्रोसेस नहीं हो सकी। सुनना बंद करें और दोबारा कोशिश करें।",
+        ),
+      );
       return;
     }
     const preparedDuration = prepared.length / REFERENCE_RATE;
     if (preparedDuration < 5) {
       setRecState("idle");
       setError(
-        `After removing silence only ${preparedDuration.toFixed(1)}s remains. Record at least 5 seconds of speech.`,
+        t(
+          `After removing silence only ${preparedDuration.toFixed(1)}s remains. Record at least 5 seconds of speech.`,
+          `सन्नाटा हटाने के बाद केवल ${preparedDuration.toFixed(1)} सेकंड बचे। कम से कम 5 सेकंड की बोली रिकॉर्ड करें।`,
+        ),
       );
       return;
     }
@@ -896,8 +1090,14 @@ export default function Home() {
     void persistRecording(wav, preparedDuration);
     setStatus(
       quality.warnings.length
-        ? `Recorded ${preparedDuration.toFixed(1)}s, but the reference has problems — read the notes below before using it.`
-        : `Recorded ${preparedDuration.toFixed(1)}s of speech. Listen to the preview, then tap "Use this voice".`,
+        ? t(
+            `Recorded ${preparedDuration.toFixed(1)}s, but the reference has problems — read the notes below before using it.`,
+            `${preparedDuration.toFixed(1)} सेकंड रिकॉर्ड हुए, लेकिन रेफ़रेंस में समस्याएँ हैं — इस्तेमाल से पहले नीचे दिए नोट्स पढ़ें।`,
+          )
+        : t(
+            `Recorded ${preparedDuration.toFixed(1)}s of speech. Listen to the preview, then tap "Use this voice".`,
+            `${preparedDuration.toFixed(1)} सेकंड की बोली रिकॉर्ड हुई। प्रीव्यू सुनें, फिर "इस आवाज़ का उपयोग करें" पर टैप करें।`,
+          ),
     );
   }
 
@@ -907,7 +1107,8 @@ export default function Home() {
   }
 
   async function uploadVoice(file: Blob, name: string) {
-    setStatus("Creating voice embedding…");
+    setStatus(t("Creating voice embedding…", "आवाज़ एम्बेडिंग बना रहे हैं…"));
+    setUploading(true);
     setError("");
     const recording = previewRecording.current;
     try {
@@ -932,7 +1133,7 @@ export default function Home() {
         quality?: { verdict?: string; score?: number; warnings?: string[] };
       } = await res.json().catch(() => ({}));
       if (!res.ok) {
-        setError(data.detail || `Enrol failed (${res.status})`);
+        setError(data.detail || t(`Enrol failed (${res.status})`, `एनरोल विफल (${res.status})`));
         setStatus("");
         return;
       }
@@ -944,8 +1145,18 @@ export default function Home() {
       if (data.fallback) {
         addFallback("stock_voice");
         const blocked = data.upstream_status === 401 || data.upstream_status === 403;
-        setVoiceIssue(blocked ? data.message || "Gnani rejected the API key." : "");
-        setError(data.message || "Cloning failed. Using the stock voice; record again to retry.");
+        setVoiceIssue(
+          blocked
+            ? data.message || t("Gnani rejected the API key.", "Gnani ने API कुंजी अस्वीकार की।")
+            : "",
+        );
+        setError(
+          data.message ||
+            t(
+              "Cloning failed. Using the stock voice; record again to retry.",
+              "क्लोनिंग विफल। स्टॉक आवाज़ इस्तेमाल हो रही है; दोबारा कोशिश के लिए फिर रिकॉर्ड करें।",
+            ),
+        );
       } else {
         voiceVersion.current += 1;
         favCache.current.clear();
@@ -956,15 +1167,28 @@ export default function Home() {
         void loadVoices();
         setStatus(
           warnings.length
-            ? "Clone ready, but the reference audio has problems — see the notes above the speak box."
-            : "Clone ready. Tap “Test this voice” to check that it sounds like you.",
+            ? t(
+                "Clone ready, but the reference audio has problems — see the notes above the speak box.",
+                "क्लोन तैयार है, लेकिन रेफ़रेंस ऑडियो में समस्याएँ हैं — बोलने के बॉक्स के ऊपर दिए नोट्स देखें।",
+              )
+            : t(
+                "Clone ready. Tap “Test this voice” to check that it sounds like you.",
+                "क्लोन तैयार है। जाँचने के लिए “इस आवाज़ को आज़माएँ” पर टैप करें कि यह आप जैसी लगती है।",
+              ),
         );
       }
       setStage("talk");
       refreshCredits();
     } catch {
       setStatus("");
-      setError("Could not reach the voice server. Check that the backend is running and try again.");
+      setError(
+        t(
+          "Could not reach the voice server. Check that the backend is running and try again.",
+          "वॉइस सर्वर से संपर्क नहीं हो सका। जाँचें कि बैकएंड चल रहा है, फिर दोबारा कोशिश करें।",
+        ),
+      );
+    } finally {
+      setUploading(false);
     }
   }
 
@@ -973,16 +1197,24 @@ export default function Home() {
     ev.target.value = "";
     if (!file) return;
     if (recState === "recording") {
-      setError("Stop the current recording before uploading a file.");
+      setError(
+        t(
+          "Stop the current recording before uploading a file.",
+          "फ़ाइल अपलोड करने से पहले मौजूदा रिकॉर्डिंग रोकें।",
+        ),
+      );
       return;
     }
     if (file.size === 0) {
-      setError("That file is empty. Choose another audio file.");
+      setError(t("That file is empty. Choose another audio file.", "वह फ़ाइल खाली है। दूसरी ऑडियो फ़ाइल चुनें।"));
       return;
     }
     if (file.size > MAX_SOURCE_MB * 1024 * 1024) {
       setError(
-        `That file is over ${MAX_SOURCE_MB} MB. Trim the clip or export just the audio track.`,
+        t(
+          `That file is over ${MAX_SOURCE_MB} MB. Trim the clip or export just the audio track.`,
+          `वह फ़ाइल ${MAX_SOURCE_MB} MB से बड़ी है। क्लिप छोटी करें या सिर्फ़ ऑडियो ट्रैक निर्यात करें।`,
+        ),
       );
       return;
     }
@@ -993,7 +1225,12 @@ export default function Home() {
       file.type === "video/3gpp" ||
       /\.(wav|mp3|m4a|mp4|mov|3gp|3gpp|ogg|oga|opus|flac|aac|webm|amr)$/i.test(file.name);
     if (!looksAudio) {
-      setError("Choose an audio file (WAV, MP3, M4A, MP4, OGG, FLAC or AAC).");
+      setError(
+        t(
+          "Choose an audio file (WAV, MP3, M4A, MP4, OGG, FLAC or AAC).",
+          "ऑडियो फ़ाइल चुनें (WAV, MP3, M4A, MP4, OGG, FLAC या AAC)।",
+        ),
+      );
       return;
     }
 
@@ -1002,13 +1239,16 @@ export default function Home() {
     setQualityWarnings([]);
     setQualityScore(null);
     setFileBusy(true);
-    setStatus(`Reading ${file.name}…`);
+    setStatus(t(`Reading ${file.name}…`, `${file.name} पढ़ रहे हैं…`));
     let ctx: AudioContext | null = null;
     try {
       const mediaSeconds = await probeMediaDuration(file);
       if (mediaSeconds > MAX_SOURCE_SECONDS) {
         setError(
-          `That file is ${Math.round(mediaSeconds / 60)} minutes long. Use at most 10 minutes; only the first 30 seconds of speech are used.`,
+          t(
+            `That file is ${Math.round(mediaSeconds / 60)} minutes long. Use at most 10 minutes; only the first 30 seconds of speech are used.`,
+            `वह फ़ाइल ${Math.round(mediaSeconds / 60)} मिनट लंबी है। अधिकतम 10 मिनट इस्तेमाल करें; केवल पहले 30 सेकंड की बोली ली जाती है।`,
+          ),
         );
         setStatus("");
         return;
@@ -1035,7 +1275,10 @@ export default function Home() {
       let duration = prepared.length / REFERENCE_RATE;
       if (duration < 5) {
         setError(
-          `This file has only ${duration.toFixed(1)}s of audible speech. Use at least 5 seconds, ideally 20–30.`,
+          t(
+            `This file has only ${duration.toFixed(1)}s of audible speech. Use at least 5 seconds, ideally 20–30.`,
+            `इस फ़ाइल में केवल ${duration.toFixed(1)} सेकंड की सुनाई देने वाली बोली है। कम से कम 5 सेकंड, बेहतर हो 20–30 सेकंड इस्तेमाल करें।`,
+          ),
         );
         setStatus("");
         return;
@@ -1044,7 +1287,10 @@ export default function Home() {
       if (duration > 30) {
         prepared = prepared.slice(0, Math.floor(REFERENCE_RATE * 30));
         duration = prepared.length / REFERENCE_RATE;
-        note = "The file was longer than 30s, so the first 30 seconds will be used.";
+        note = t(
+          "The file was longer than 30s, so the first 30 seconds will be used.",
+          "फ़ाइल 30 सेकंड से लंबी थी, इसलिए पहले 30 सेकंड इस्तेमाल होंगे।",
+        );
       }
       const wav = encodeWav(prepared, REFERENCE_RATE);
       const quality = analyzeSample(reference.slice(0, REFERENCE_RATE * 30), REFERENCE_RATE);
@@ -1055,13 +1301,22 @@ export default function Home() {
       setFileNote(note);
       setStatus(
         quality.warnings.length
-          ? `Loaded ${duration.toFixed(1)}s, but the reference has problems — read the notes below before using it.`
-          : `Loaded ${duration.toFixed(1)}s of speech from ${file.name}. Preview it, then tap "Use this voice".`,
+          ? t(
+              `Loaded ${duration.toFixed(1)}s, but the reference has problems — read the notes below before using it.`,
+              `${duration.toFixed(1)} सेकंड लोड हुए, लेकिन रेफ़रेंस में समस्याएँ हैं — इस्तेमाल से पहले नीचे दिए नोट्स पढ़ें।`,
+            )
+          : t(
+              `Loaded ${duration.toFixed(1)}s of speech from ${file.name}. Preview it, then tap "Use this voice".`,
+              `${file.name} से ${duration.toFixed(1)} सेकंड की बोली लोड हुई। प्रीव्यू सुनें, फिर "इस आवाज़ का उपयोग करें" पर टैप करें।`,
+            ),
       );
     } catch {
       setStatus("");
       setError(
-        "This browser could not read the audio in that file. If it is an MP4/MOV video, convert it to MP3 or WAV, or record directly instead.",
+        t(
+          "This browser could not read the audio in that file. If it is an MP4/MOV video, convert it to MP3 or WAV, or record directly instead.",
+          "यह ब्राउज़र उस फ़ाइल का ऑडियो नहीं पढ़ सका। अगर यह MP4/MOV वीडियो है, तो इसे MP3 या WAV में बदलें, या सीधे रिकॉर्ड करें।",
+        ),
       );
     } finally {
       setFileBusy(false);
@@ -1116,7 +1371,7 @@ export default function Home() {
     const text = favText.trim().replace(/\s+/g, " ").slice(0, 80);
     if (!text) return;
     if (favourites.some((item) => item.text.toLowerCase() === text.toLowerCase())) {
-      setError("That phrase is already in favourites.");
+      setError(t("That phrase is already in favourites.", "वह वाक्यांश पहले से पसंदीदा में है।"));
       return;
     }
     const item: FavouriteItem = {
@@ -1185,7 +1440,7 @@ export default function Home() {
     pcmQueue.current = new Int16Array(0);
   }
 
-  function startBrowserSpeech() {
+  function startBrowserSpeech(langOverride?: string) {
     if (browserRecActive.current || closingListen.current) return;
     const win = window as Window & {
       SpeechRecognition?: new () => BrowserRec;
@@ -1194,14 +1449,27 @@ export default function Home() {
     const SR = win.SpeechRecognition || win.webkitSpeechRecognition;
     if (!SR) {
       addFallback("browser_speech_unavailable");
-      setError("This browser has no speech recognition. Use Chrome or Edge for live listening.");
+      setError(
+        t(
+          "This browser has no speech recognition. Use Chrome or Edge for live listening.",
+          "इस ब्राउज़र में वाक् पहचान नहीं है। लाइव सुनने के लिए Chrome या Edge इस्तेमाल करें।",
+        ),
+      );
       return;
     }
     addFallback("browser_speech");
     const rec = new SR();
     rec.continuous = true;
     rec.interimResults = true;
-    rec.lang = listenLang === "indic-auto" ? "en-IN" : listenLang;
+    const speechLang = langOverride || listenLang;
+    // Browser recognition has no Hinglish locale. English (India) keeps the
+    // transcript in Latin script, which is the closest match for Hinglish.
+    rec.lang =
+      speechLang === "indic-auto" ||
+      speechLang === "hi-en" ||
+      speechLang.includes(",")
+        ? "en-IN"
+        : speechLang;
     rec.onresult = (raw) => {
       const event = raw as {
         resultIndex: number;
@@ -1210,9 +1478,9 @@ export default function Home() {
       let finalText = "";
       let interim = "";
       for (let i = event.resultIndex; i < event.results.length; i++) {
-        const t = event.results[i][0].transcript;
-        if (event.results[i].isFinal) finalText += t;
-        else interim += t;
+        const part = event.results[i][0].transcript;
+        if (event.results[i].isFinal) finalText += part;
+        else interim += part;
       }
       if (interim) setLiveText(interim);
       if (finalText) {
@@ -1234,9 +1502,9 @@ export default function Home() {
     rec.onerror = (event) => {
       const code = event?.error;
       if (code === "not-allowed" || code === "service-not-allowed") {
-        setError("Speech recognition permission was denied.");
+        setError(t("Speech recognition permission was denied.", "वाक् पहचान की अनुमति अस्वीकार हुई।"));
       } else if (code === "audio-capture") {
-        setError("No microphone found for speech recognition.");
+        setError(t("No microphone found for speech recognition.", "वाक् पहचान के लिए कोई माइक्रोफ़ोन नहीं मिला।"));
       }
     };
     rec.onend = () => {
@@ -1244,7 +1512,7 @@ export default function Home() {
       if (!closingListen.current && listeningRef.current && !browserRecRestart.current) {
         browserRecRestart.current = window.setTimeout(() => {
           browserRecRestart.current = null;
-          startBrowserSpeech();
+          startBrowserSpeech(langOverride);
         }, 500);
       }
     };
@@ -1255,7 +1523,12 @@ export default function Home() {
       setListenState("fallback");
     } catch {
       browserRecActive.current = false;
-      setError("Could not start browser speech recognition. Stop listening and try again.");
+      setError(
+        t(
+          "Could not start browser speech recognition. Stop listening and try again.",
+          "ब्राउज़र वाक् पहचान शुरू नहीं हो सकी। सुनना बंद करें और दोबारा कोशिश करें।",
+        ),
+      );
     }
   }
 
@@ -1276,8 +1549,20 @@ export default function Home() {
     }
   }
 
-  async function startListen() {
+  function changeListenLang(lang: string) {
+    setListenLang(lang);
+    localStorage.setItem(LISTEN_LANG_KEY, lang);
+    // Existing chips are in the previous language; fetch new ones for this one.
+    if (partnerTurns.current.length) void loadSuggestions(lang);
+    if (listeningRef.current) {
+      stopListen();
+      window.setTimeout(() => void startListen(lang), 120);
+    }
+  }
+
+  async function startListen(forcedLang?: string) {
     if (!sessionId || listeningRef.current) return;
+    const langToUse = forcedLang || listenLang;
     closingListen.current = false;
     listeningRef.current = true;
     setListening(true);
@@ -1301,7 +1586,12 @@ export default function Home() {
       listeningRef.current = false;
       setListening(false);
       setListenState("idle");
-      setError("Microphone unavailable. Allow microphone access and try again.");
+      setError(
+        t(
+          "Microphone unavailable. Allow microphone access and try again.",
+          "माइक्रोफ़ोन उपलब्ध नहीं है। माइक्रोफ़ोन की अनुमति दें और दोबारा कोशिश करें।",
+        ),
+      );
       return;
     }
 
@@ -1312,7 +1602,7 @@ export default function Home() {
     listenStream.current = stream;
     const socket = new WebSocket(
       wsUrl(
-        `/ws/listen?session_id=${encodeURIComponent(sessionId)}&language=${encodeURIComponent(listenLang)}`,
+        `/ws/listen?session_id=${encodeURIComponent(sessionId)}&language=${encodeURIComponent(langToUse)}`,
       ),
     );
     listenWs.current = socket;
@@ -1330,14 +1620,14 @@ export default function Home() {
       }
       if (frame.type === "ready") {
         setListenState("connecting");
-        setStatus("Connecting to Prisma…");
+        setStatus(t("Connecting to Prisma…", "Prisma से कनेक्ट हो रहे हैं…"));
       } else if (frame.type === "connected") {
         setListenState("live");
         setStatus("");
       } else if (frame.type === "speech_start") {
-        setStatus("Hearing speech…");
+        setStatus(t("Hearing speech…", "बोली सुनाई दे रही है…"));
       } else if (frame.type === "processing") {
-        setStatus("Transcribing…");
+        setStatus(t("Transcribing…", "ट्रांसक्राइब हो रहा है…"));
       } else if (frame.type === "transcript") {
         const text = (frame.text || "").trim();
         if (text) {
@@ -1350,16 +1640,16 @@ export default function Home() {
         addFallback(frame.fallback_kind || "browser_speech");
         setListenState("fallback");
         stopCapture();
-        startBrowserSpeech();
+        startBrowserSpeech(langToUse);
       } else if (frame.type === "error") {
-        setError(frame.message || "Live transcription error.");
+        setError(frame.message || t("Live transcription error.", "लाइव ट्रांसक्रिप्शन में त्रुटि।"));
       }
     };
     socket.onerror = () => {
       if (!closingListen.current) {
         addFallback("browser_speech");
         stopCapture();
-        startBrowserSpeech();
+        startBrowserSpeech(langToUse);
       }
     };
     socket.onclose = () => {
@@ -1367,7 +1657,7 @@ export default function Home() {
         addFallback("browser_speech");
         setListenState("fallback");
         stopCapture();
-        startBrowserSpeech();
+        startBrowserSpeech(langToUse);
       }
     };
 
@@ -1410,7 +1700,12 @@ export default function Home() {
       listeningRef.current = false;
       setListening(false);
       setListenState("idle");
-      setError("Could not start audio capture. Try Chrome or Edge, then retry.");
+      setError(
+        t(
+          "Could not start audio capture. Try Chrome or Edge, then retry.",
+          "ऑडियो कैप्चर शुरू नहीं हो सका। Chrome या Edge आज़माएँ, फिर दोबारा कोशिश करें।",
+        ),
+      );
     }
   }
 
@@ -1454,25 +1749,25 @@ export default function Home() {
     }, 250);
   }
 
-  async function loadSuggestions() {
+  async function loadSuggestions(languageOverride?: string) {
     if (!sessionId) return;
     // Ignore a slow older response if a newer transcript already arrived.
     const seq = ++suggestSeq.current;
     const turns = partnerTurns.current.slice(-8);
+    const listenLanguage = languageOverride || listenLang;
+    const payload: Record<string, unknown> = {};
+    if (turns.length) payload.turns = turns;
+    // A Hinglish session should get Roman-script Hindi suggestions even when
+    // the partner's transcript is short or mixed.
+    if (listenLanguage === "hi-en") payload.language = "hinglish";
+    if (userGenderRef.current !== "neutral") {
+      payload.user_gender = userGenderRef.current;
+    }
     try {
       const res = await api("/api/suggest", sessionId, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(
-          turns.length
-            ? {
-                turns,
-                ...(userGenderRef.current === "neutral"
-                  ? {}
-                  : { user_gender: userGenderRef.current }),
-              }
-            : {},
-        ),
+        body: JSON.stringify(payload),
       });
       if (!res.ok || seq !== suggestSeq.current) return;
       const data = await res.json();
@@ -1515,7 +1810,13 @@ export default function Home() {
       };
       audio.onended = () => finish(resolve);
       audio.onerror = () =>
-        finish(() => reject(new Error("Could not play the generated audio.")));
+        finish(() =>
+          reject(
+            new Error(
+              t("Could not play the generated audio.", "बनाई गई ऑडियो चलाई नहीं जा सकी।"),
+            ),
+          ),
+        );
       // A voice change or unmount pauses the element; resolve so speakText
       // does not stay stuck with its "speaking" lock held.
       audio.onpause = () => {
@@ -1554,7 +1855,7 @@ export default function Home() {
         });
         if (!res.ok) {
           const detail: { detail?: string } = await res.json().catch(() => ({}));
-          throw new Error(detail.detail || `Speak failed (${res.status})`);
+          throw new Error(detail.detail || t(`Speak failed (${res.status})`, `बोलना विफल (${res.status})`));
         }
         if (res.headers.get("X-Fallback") === "true") addFallback("stock_voice");
         setAiLabel(res.headers.get("X-AI-Generated") === "true");
@@ -1576,9 +1877,8 @@ export default function Home() {
     await speakText(fav.text, fav.emotion);
   }
 
-  const uploading = status.startsWith("Creating voice embedding");
   const mood: BuddyMood = speaking ? "speaking" : listening ? "listening" : "idle";
-  const dockVisible = stage === "talk" && !heroInView;
+  const dockVisible = stage === "talk";
   const activeVoice = savedVoices.find((voice) => voice.id === activeVoiceId) ?? null;
   const unclonedRecordings = savedRecordings.filter(
     (rec) => !savedVoices.some((voice) => voice.recording === rec.name),
@@ -1594,7 +1894,7 @@ export default function Home() {
             type="button"
             className="record-dot live"
             onClick={stopRecord}
-            aria-label="Stop recording"
+            aria-label={t("Stop recording", "रिकॉर्डिंग रोकें")}
           >
             <span className="record-stop" aria-hidden="true" />
           </button>
@@ -1604,17 +1904,19 @@ export default function Home() {
             className="record-dot"
             onClick={startRecord}
             disabled={uploading || fileBusy}
-            aria-label={previewUrl ? "Record again" : "Start recording"}
+            aria-label={
+              previewUrl ? t("Record again", "दोबारा रिकॉर्ड करें") : t("Start recording", "रिकॉर्डिंग शुरू करें")
+            }
           >
             <span className="record-glyph" aria-hidden="true" />
           </button>
         )}
         <span className="orb-action-label">
           {recState === "recording"
-            ? `Stop · ${seconds}s`
+            ? t(`Stop · ${seconds}s`, `रोकें · ${seconds}से`)
             : previewUrl
-              ? "Record again"
-              : "Record your voice"}
+              ? t("Record again", "दोबारा रिकॉर्ड करें")
+              : t("Record your voice", "अपनी आवाज़ रिकॉर्ड करें")}
         </span>
       </div>
     ) : stage === "talk" ? (
@@ -1624,7 +1926,7 @@ export default function Home() {
             type="button"
             className="record-dot live"
             onClick={stopListen}
-            aria-label="Stop listening"
+            aria-label={t("Stop listening", "सुनना बंद करें")}
           >
             <span className="record-stop" aria-hidden="true" />
           </button>
@@ -1637,17 +1939,17 @@ export default function Home() {
               scrollToThread();
             }}
             disabled={listenState === "connecting"}
-            aria-label="Start listening"
+            aria-label={t("Start listening", "सुनना शुरू करें")}
           >
             <MicIcon />
           </button>
         )}
         <span className="orb-action-label">
           {listening
-            ? "Listening · tap to stop"
+            ? t("Listening · tap to stop", "सुन रहे हैं · रोकने के लिए टैप करें")
             : listenState === "connecting"
-              ? "Connecting…"
-              : "Start listening"}
+              ? t("Connecting…", "कनेक्ट हो रहे हैं…")
+              : t("Start listening", "सुनना शुरू करें")}
         </span>
       </div>
     ) : null;
@@ -1663,8 +1965,32 @@ export default function Home() {
             APNI AWAAZ
           </span>
           <div className="topbar-right">
+            <div
+              className="ui-lang"
+              role="group"
+              aria-label={t("App language", "ऐप की भाषा")}
+            >
+              <button
+                type="button"
+                className={uiLang === "en" ? "active" : ""}
+                onClick={() => changeUiLang("en")}
+                aria-pressed={uiLang === "en"}
+              >
+                English
+              </button>
+              <button
+                type="button"
+                className={uiLang === "hi" ? "active" : ""}
+                onClick={() => changeUiLang("hi")}
+                aria-pressed={uiLang === "hi"}
+              >
+                हिन्दी
+              </button>
+            </div>
             <span className={`topbar-pill ${cloneReady ? "on" : ""}`}>
-              {cloneReady ? "CLONE ONLINE" : "CLONE PENDING"}
+              {cloneReady
+                ? t("CLONE ONLINE", "क्लोन ऑनलाइन")
+                : t("CLONE PENDING", "क्लोन लंबित")}
             </span>
             <span ref={clockRef} className="topbar-time">
               TIME --:--:--
@@ -1674,56 +2000,70 @@ export default function Home() {
         <header className="hero">
           <div className="hero-copy">
             <span className="eyebrow">
-              APNI AWAAZ <i>//</i> VOICE SYNTHESIS
+              APNI AWAAZ <i>//</i> {t("VOICE SYNTHESIS", "वॉइस सिंथेसिस")}
             </span>
             <h1>
-              Give your
+              {t("Give your", "अपनी आवाज़")}
               <br />
-              voice back
+              {t("voice back", "वापस पाएँ")}
             </h1>
             <p className="lede">
-              Type or tap a reply. The core speaks it in a clone of your voice —
-              one take, kept across restarts, no re-recording.
+              {t(
+                "Type or tap a reply. The core speaks it in a clone of your voice — one take, kept across restarts, no re-recording.",
+                "जवाब टाइप करें या टैप करें। यह केंद्र आपकी आवाज़ के क्लोन में उसे बोलता है — एक ही टेक, रीस्टार्ट के बाद भी सुरक्षित, दोबारा रिकॉर्डिंग नहीं।",
+              )}
             </p>
             <div className="hero-meta">
               <span className={`meta ${cloneReady ? "good" : ""}`}>
-                {cloneReady ? "CLONE READY" : "CLONE PENDING"}
+                {cloneReady
+                  ? t("CLONE READY", "क्लोन तैयार")
+                  : t("CLONE PENDING", "क्लोन लंबित")}
               </span>
               <span className="meta">
-                {listenState === "live" ? "INPUT LIVE" : "INPUT IDLE"}
+                {listenState === "live"
+                  ? t("INPUT LIVE", "इनपुट लाइव")
+                  : t("INPUT IDLE", "इनपुट निष्क्रिय")}
               </span>
             </div>
           </div>
-          <VoiceCore mood={mood} action={heroAction} />
-          <aside className="hero-panel" aria-label="Voice core status">
-            <div className="hero-panel-title">VOICE CORE</div>
+          <VoiceCore mood={mood} action={heroAction} lang={uiLang} />
+          <aside
+            className="hero-panel"
+            aria-label={t("Voice core status", "वॉइस कोर स्थिति")}
+          >
+            <div className="hero-panel-title">{t("VOICE CORE", "वॉइस कोर")}</div>
             <div className="status-item">
-              <span>Clone</span>
-              <strong>{cloneReady ? "Ready" : "Pending"}</strong>
+              <span>{t("Clone", "क्लोन")}</span>
+              <strong>{cloneReady ? t("Ready", "तैयार") : t("Pending", "लंबित")}</strong>
             </div>
             <div className="status-item">
-              <span>Input</span>
-              <strong>{listenState === "live" ? "Live" : "Idle"}</strong>
+              <span>{t("Input", "इनपुट")}</span>
+              <strong>
+                {listenState === "live" ? t("Live", "लाइव") : t("Idle", "निष्क्रिय")}
+              </strong>
             </div>
             <div className="status-item">
-              <span>Engine</span>
+              <span>{t("Engine", "इंजन")}</span>
               <strong>Gnani Timbre</strong>
             </div>
             <div className="status-item">
-              <span>Language</span>
-              <strong>{speakLang === "auto" ? "Auto" : speakLang}</strong>
+              <span>{t("Language", "भाषा")}</span>
+              <strong>{speakLang === "auto" ? t("Auto", "ऑटो") : speakLang}</strong>
             </div>
             <div className="status-item">
-              <span>Spend</span>
+              <span>{t("Spend", "खर्च")}</span>
               <strong>{credits || "—"}</strong>
             </div>
           </aside>
         </header>
         <div className="row" style={{ marginBottom: "1rem" }}>
-        {aiLabel && <span className="badge">AI-generated audio</span>}
+        {aiLabel && <span className="badge">{t("AI-generated audio", "AI से बनाई ऑडियो")}</span>}
         {fallbacks.map((f) => (
           <span className="badge warn" key={f}>
-            Fallback: {f.replaceAll("_", " ")}
+            {t("Fallback: ", "फ़ॉलबैक: ")}
+            {FALLBACK_LABELS[f]
+              ? t(FALLBACK_LABELS[f].en, FALLBACK_LABELS[f].hi)
+              : f.replaceAll("_", " ")}
           </span>
         ))}
         {credits && <span className="badge">{credits}</span>}
@@ -1732,17 +2072,22 @@ export default function Home() {
 
       {stage === "consent" && (
         <section className="card">
-          <h2>Before we clone a voice</h2>
+          <h2>{t("Before we clone a voice", "आवाज़ क्लोन करने से पहले")}</h2>
           <label className="consent">
             <input type="checkbox" checked={agreed} onChange={(e) => setAgreed(e.target.checked)} />
-            <span>This is my own voice, or I have the speaker&apos;s permission.</span>
+            <span>
+              {t(
+                "This is my own voice, or I have the speaker's permission.",
+                "यह मेरी अपनी आवाज़ है, या मेरे पास वक्ता की अनुमति है।",
+              )}
+            </span>
           </label>
           <div className="row" style={{ marginTop: "1rem" }}>
             <button disabled={!agreed || !sessionId} onClick={submitConsent}>
-              Continue
+              {t("Continue", "जारी रखें")}
             </button>
             <button className="secondary" disabled={!agreed || !sessionId} onClick={startDemo}>
-              One-click demo
+              {t("One-click demo", "वन-क्लिक डेमो")}
             </button>
           </div>
         </section>
@@ -1750,17 +2095,18 @@ export default function Home() {
 
       {stage === "enrol" && (
         <section className="card">
-          <h2>Voice enrolment</h2>
+          <h2>{t("Voice enrolment", "आवाज़ एनरोलमेंट")}</h2>
           <p className="lede">
-            Record 15–30 seconds of natural speech in a quiet room. Use one person only —
-            no music, no singing, no TV, no second voice. Speak the same language you will
-            use for replies. A clean, close-mic take makes the biggest difference to how
-            closely the clone matches you.
+            {t(
+              "Record 15–30 seconds of natural speech in a quiet room. Use one person only — no music, no singing, no TV, no second voice. Speak the same language you will use for replies. A clean, close-mic take makes the biggest difference to how closely the clone matches you.",
+              "शांत कमरे में 15–30 सेकंड की सहज बोली रिकॉर्ड करें। केवल एक व्यक्ति — कोई संगीत, गाना, टीवी या दूसरी आवाज़ नहीं। वही भाषा बोलें जिसका इस्तेमाल आप जवाबों के लिए करेंगे। साफ़, माइक के पास की रिकॉर्डिंग क्लोन को आपसे सबसे ज़्यादा मिलती-जुलती बनाती है।",
+            )}
           </p>
           <p className="meter">
-            Good reference: continuous talking, normal volume, about a hand-width from the
-            mic. Bad reference: whispering, shouting, singing, background music, or a video
-            with several speakers.
+            {t(
+              "Good reference: continuous talking, normal volume, about a hand-width from the mic. Bad reference: whispering, shouting, singing, background music, or a video with several speakers.",
+              "अच्छा रेफ़रेंस: लगातार बोलना, सामान्य आवाज़, माइक से लगभग एक हथेली की दूरी। खराब रेफ़रेंस: फुसफुसाना, चिल्लाना, गाना, पृष्ठभूमि संगीत, या कई वक्ताओं वाला वीडियो।",
+            )}
           </p>
           <div className="row">
             <button
@@ -1769,7 +2115,9 @@ export default function Home() {
               onClick={() => fileInput.current?.click()}
               disabled={fileBusy || uploading || recState === "recording"}
             >
-              {fileBusy ? "Reading file…" : "Upload audio file"}
+              {fileBusy
+                ? t("Reading file…", "फ़ाइल पढ़ रहे हैं…")
+                : t("Upload audio file", "ऑडियो फ़ाइल अपलोड करें")}
             </button>
             <input
               ref={fileInput}
@@ -1788,21 +2136,25 @@ export default function Home() {
                   setStage("talk");
                 }}
               >
-                Use previous voice
+                {t("Use previous voice", "पिछली आवाज़ इस्तेमाल करें")}
               </button>
             )}
           </div>
           {fileNote && <p className="meter">{fileNote}</p>}
-          {savingRecording && <p className="meter">Saving MP4 copy…</p>}
+          {savingRecording && (
+            <p className="meter">{t("Saving MP4 copy…", "MP4 कॉपी सहेजी जा रही है…")}</p>
+          )}
           {!savingRecording && recordingNote && (
             <p className="meter">{recordingNote}</p>
           )}
           {savedRecordings.length > 0 && (
             <div className="recordings">
               <p className="meter">
-                <strong>Saved recordings</strong> — every take is kept as an MP4
-                file on the server. Tap “Use this voice” to switch back to an
-                earlier take without recording again.
+                <strong>{t("Saved recordings", "सहेजी गई रिकॉर्डिंग")}</strong>
+                {t(
+                  " — every take is kept as an MP4 file on the server. Tap “Use this voice” to switch back to an earlier take without recording again.",
+                  " — हर टेक सर्वर पर MP4 फ़ाइल के रूप में रखा जाता है। बिना दोबारा रिकॉर्ड किए पुराने टेक पर लौटने के लिए “इस आवाज़ का उपयोग करें” पर टैप करें।",
+                )}
               </p>
               {voiceError && (
                 <p className="voice-alert" role="alert">
@@ -1818,12 +2170,19 @@ export default function Home() {
                   return (
                     <li key={recording.name}>
                       <div className="recording-line">
-                        <span>{new Date(recording.created_at).toLocaleString()}</span>
+                        <span>
+                          {new Date(recording.created_at).toLocaleString(
+                            uiLang === "hi" ? "hi-IN" : "en-GB",
+                          )}
+                        </span>
                         {recording.seconds ? (
-                          <span>{recording.seconds.toFixed(1)}s</span>
+                          <span>
+                            {recording.seconds.toFixed(1)}
+                            {uiLang === "hi" ? "से" : "s"}
+                          </span>
                         ) : null}
                         <a href={`${API_URL}${recording.url}`} download={recording.name}>
-                          Download MP4
+                          {t("Download MP4", "MP4 डाउनलोड करें")}
                         </a>
                       </div>
                       <audio
@@ -1839,10 +2198,10 @@ export default function Home() {
                           onClick={() => void selectVoice(linked, true)}
                         >
                           {inUse
-                            ? "In use"
+                            ? t("In use", "उपयोग में")
                             : voiceBusy === linked.id
-                              ? "Switching…"
-                              : "Use this voice"}
+                              ? t("Switching…", "स्विच हो रहा है…")
+                              : t("Use this voice", "इस आवाज़ का उपयोग करें")}
                         </button>
                       ) : (
                         <button
@@ -1852,14 +2211,16 @@ export default function Home() {
                           onClick={() => void cloneFromRecording(recording)}
                         >
                           {voiceBusy === recording.name
-                            ? "Creating voice…"
-                            : "Clone this recording"}
+                            ? t("Creating voice…", "आवाज़ बना रहे हैं…")
+                            : t("Clone this recording", "इस रिकॉर्डिंग को क्लोन करें")}
                         </button>
                       )}
                       {!linked && (
                         <p className="meter recording-note">
-                          This take was never cloned. Creating a voice from it uses
-                          about 50 Gnani credits.
+                          {t(
+                            "This take was never cloned. Creating a voice from it uses about 50 Gnani credits.",
+                            "यह टेक कभी क्लोन नहीं हुआ। इससे आवाज़ बनाने में लगभग 50 Gnani क्रेडिट लगते हैं।",
+                          )}
                         </p>
                       )}
                     </li>
@@ -1873,21 +2234,25 @@ export default function Home() {
           </div>
           <p className="meter">
             {recState === "recording"
-              ? `Recording… ${seconds}s / 30s. Keep the mic about a hand-width away.`
+              ? t(
+                  `Recording… ${seconds}s / 30s. Keep the mic about a hand-width away.`,
+                  `रिकॉर्ड हो रहा है… ${seconds}से / 30से। माइक को लगभग एक हथेली की दूरी पर रखें।`,
+                )
               : status}
           </p>
           {previewUrl && (
             <div className="preview">
               <p className="meter">
-                Preview this recording before creating the clone. It must be one person
-                speaking, with no music, singing, or second voice. If it is noisy, echoey,
-                or quiet, record again.
+                {t(
+                  "Preview this recording before creating the clone. It must be one person speaking, with no music, singing, or second voice. If it is noisy, echoey, or quiet, record again.",
+                  "क्लोन बनाने से पहले यह रिकॉर्डिंग सुनें। इसमें एक ही व्यक्ति बोल रहा हो, कोई संगीत, गाना या दूसरी आवाज़ न हो। अगर शोर, गूँज या धीमी आवाज़ है, तो दोबारा रिकॉर्ड करें।",
+                )}
               </p>
               {previewWarnings.length > 0 && (
                 <div className="quality">
                   <p>
                     <strong>
-                      This reference may clone poorly
+                      {t("This reference may clone poorly", "यह रेफ़रेंस खराब क्लोन बन सकता है")}
                       {previewScore !== null ? ` · ${previewScore}/100` : ""}
                     </strong>
                   </p>
@@ -1897,18 +2262,22 @@ export default function Home() {
                     ))}
                   </ul>
                   <p className="meter">
-                    Fix the issue and record or upload again — the clone can only be as
-                    good as this clip.
+                    {t(
+                      "Fix the issue and record or upload again — the clone can only be as good as this clip.",
+                      "समस्या ठीक करें और दोबारा रिकॉर्ड या अपलोड करें — क्लोन इस क्लिप जितना ही अच्छा हो सकता है।",
+                    )}
                   </p>
                 </div>
               )}
               <audio controls src={previewUrl} />
               <div className="row" style={{ marginTop: "0.7rem" }}>
                 <button onClick={confirmEnrol} disabled={uploading}>
-                  {uploading ? "Creating voice…" : "Use this voice"}
+                  {uploading
+                    ? t("Creating voice…", "आवाज़ बना रहे हैं…")
+                    : t("Use this voice", "इस आवाज़ का उपयोग करें")}
                 </button>
                 <button className="secondary" onClick={startRecord} disabled={uploading}>
-                  Record again
+                  {t("Record again", "दोबारा रिकॉर्ड करें")}
                 </button>
               </div>
             </div>
@@ -1926,25 +2295,48 @@ export default function Home() {
               aria-expanded={voiceMenuOpen}
               aria-controls="voice-menu"
             >
-              <span className="voice-key">Voice</span>
+              <span className="voice-key">{t("Voice", "आवाज़")}</span>
               <span className="voice-value">
                 {activeVoice
-                  ? takeLabel(activeVoice.seconds, activeVoice.saved_at)
+                  ? takeLabel(activeVoice.seconds, activeVoice.saved_at, uiLang)
                   : cloneReady
-                    ? "Saved voice"
-                    : "Stock voice"}
+                    ? t("Saved voice", "सहेजी गई आवाज़")
+                    : t("Stock voice", "स्टॉक आवाज़")}
               </span>
               <ChevronIcon />
             </button>
-            <button
-              type="button"
-              className="record-again"
-              onClick={startNewRecording}
-              disabled={uploading}
-            >
-              <span className="rec-dot" aria-hidden="true" />
-              Record a new voice
-            </button>
+            <div className="surface-actions">
+              {cloneReady && (
+                <button
+                  type="button"
+                  className="secondary test-voice"
+                  onClick={() =>
+                    void speakText(
+                      t(
+                        "Your voice is now cloned. This is how you sound.",
+                        "आपकी आवाज़ अब क्लोन हो गई है। यह सुनें कि आप कैसे सुनाई देते हैं।",
+                      ),
+                      emotion,
+                      false,
+                    )
+                  }
+                  disabled={speaking || uploading}
+                >
+                  {speaking
+                    ? t("Testing…", "आज़मा रहे हैं…")
+                    : t("Test this voice", "इस आवाज़ को आज़माएँ")}
+                </button>
+              )}
+              <button
+                type="button"
+                className="record-again"
+                onClick={startNewRecording}
+                disabled={uploading}
+              >
+                <span className="rec-dot" aria-hidden="true" />
+                {t("Record a new voice", "नई आवाज़ रिकॉर्ड करें")}
+              </button>
+            </div>
           </div>
           {voiceMenuOpen && (
             <div className="voice-menu" id="voice-menu">
@@ -1955,8 +2347,14 @@ export default function Home() {
               )}
               <p className="voice-hint">
                 {savedVoices.length + unclonedRecordings.length > 1
-                  ? "Every take you have recorded is here. Switching between saved clones uses no credits."
-                  : "Voices are saved on this device and survive restarts."}
+                  ? t(
+                      "Every take you have recorded is here. Switching between saved clones uses no credits.",
+                      "आपके रिकॉर्ड किए हुए सभी टेक यहाँ हैं। सहेजे गए क्लोन के बीच स्विच करने में कोई क्रेडिट नहीं लगता।",
+                    )
+                  : t(
+                      "Voices are saved on this device and survive restarts.",
+                      "आवाज़ें इस डिवाइस पर सहेजी जाती हैं और रीस्टार्ट के बाद भी रहती हैं।",
+                    )}
               </p>
               {savedVoices.map((voice) => {
                 const active = voice.id === activeVoiceId;
@@ -1971,21 +2369,23 @@ export default function Home() {
                   >
                     <span className="voice-row-main">
                       <span className="voice-row-title">
-                        {takeLabel(voice.seconds, voice.saved_at)}
+                        {takeLabel(voice.seconds, voice.saved_at, uiLang)}
                       </span>
                       <span className="voice-row-meta">
-                        {voice.recording ? "From a saved recording" : "Saved clone"}
+                        {voice.recording
+                          ? t("From a saved recording", "सहेजी गई रिकॉर्डिंग से")
+                          : t("Saved clone", "सहेजा गया क्लोन")}
                       </span>
                     </span>
                     <span className="voice-row-act">
                       {active ? (
                         <>
-                          <CheckIcon /> In use
+                          <CheckIcon /> {t("In use", "उपयोग में")}
                         </>
                       ) : voiceBusy === voice.id ? (
-                        "Switching…"
+                        t("Switching…", "स्विच हो रहा है…")
                       ) : (
-                        "Use"
+                        t("Use", "इस्तेमाल करें")
                       )}
                     </span>
                   </button>
@@ -2001,29 +2401,96 @@ export default function Home() {
                 >
                   <span className="voice-row-main">
                     <span className="voice-row-title">
-                      {takeLabel(rec.seconds, rec.created_at)}
+                      {takeLabel(rec.seconds, rec.created_at, uiLang)}
                     </span>
-                    <span className="voice-row-meta">Recording · not cloned yet</span>
+                    <span className="voice-row-meta">
+                      {t("Recording · not cloned yet", "रिकॉर्डिंग · अभी क्लोन नहीं हुई")}
+                    </span>
                   </span>
                   <span className="voice-row-act">
-                    {voiceBusy === rec.name ? "Creating…" : "Create voice"}
+                    {voiceBusy === rec.name
+                      ? t("Creating…", "बना रहे हैं…")
+                      : t("Create voice", "आवाज़ बनाएँ")}
                   </span>
                 </button>
               ))}
               {savedVoices.length === 0 && unclonedRecordings.length === 0 && (
-                <p className="chip-empty">No saved voices yet. Record one to get started.</p>
+                <p className="chip-empty">
+                  {t(
+                    "No saved voices yet. Record one to get started.",
+                    "अभी कोई सहेजी गई आवाज़ नहीं है। शुरू करने के लिए एक रिकॉर्ड करें।",
+                  )}
+                </p>
               )}
               {unclonedRecordings.length > 0 && (
                 <p className="voice-hint">
-                  Creating a voice from a saved take uses about 50 Gnani credits.
+                  {t(
+                    "Creating a voice from a saved take uses about 50 Gnani credits.",
+                    "सहेजे गए टेक से आवाज़ बनाने में लगभग 50 Gnani क्रेडिट लगते हैं।",
+                  )}
                 </p>
               )}
             </div>
           )}
           <div className="surface-divider" aria-hidden="true" />
-          <section className="thread" ref={threadRef} aria-label="Conversation">
+          <div
+            className="listen-lang-bar"
+            role="region"
+            aria-label={t("Partner speech language", "साथी की बोली की भाषा")}
+          >
+            <div className="listen-lang-label">
+              <MicIcon />
+              <span>{t("Hear speech in:", "बोली इस भाषा में सुनें:")}</span>
+            </div>
+            <div className="listen-lang-pills">
+              <button
+                type="button"
+                className={`lang-pill ${listenLang === "en-IN" ? "active" : ""}`}
+                onClick={() => changeListenLang("en-IN")}
+                title={t("Transcribe partner in English", "साथी की बोली अंग्रेज़ी में ट्रांसक्राइब करें")}
+              >
+                {t("English", "अंग्रेज़ी")}
+              </button>
+              <button
+                type="button"
+                className={`lang-pill ${listenLang === "hi-IN" ? "active" : ""}`}
+                onClick={() => changeListenLang("hi-IN")}
+                title={t("Transcribe partner in Hindi", "साथी की बोली हिन्दी में ट्रांसक्राइब करें")}
+              >
+                हिन्दी (Hindi)
+              </button>
+              <button
+                type="button"
+                className={`lang-pill ${listenLang === "hi-en" ? "active" : ""}`}
+                onClick={() => changeListenLang("hi-en")}
+                title={t(
+                  "Transcribe partner in Hinglish (Roman Hindi)",
+                  "साथी की बोली Hinglish (Roman Hindi) में ट्रांसक्राइब करें",
+                )}
+              >
+                Hinglish
+              </button>
+              <div className="lang-select-wrap">
+                <select
+                  value={listenLang}
+                  onChange={(e) => changeListenLang(e.target.value)}
+                  aria-label={t("All supported languages", "सभी समर्थित भाषाएँ")}
+                  title={t("Select from 10+ languages", "10+ भाषाओं में से चुनें")}
+                >
+                  {SUPPORTED_LANGUAGES.map((l) => (
+                    <option key={l.code} value={l.code}>
+                      {l.label} ({l.native})
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
+          </div>
+          <section className="thread" ref={threadRef} aria-label={t("Conversation", "बातचीत")}>
             {thread.length === 0 && !liveText.trim() ? (
-              <p className="thread-empty">Partner speech will appear here.</p>
+              <p className="thread-empty">
+                {t("Partner speech will appear here.", "साथी की बोली यहाँ दिखाई देगी।")}
+              </p>
             ) : (
               <ol className="bubbles">
                 {thread.map((turn, index) =>
@@ -2038,7 +2505,10 @@ export default function Home() {
                         className="bubble-replay"
                         disabled={speaking}
                         onClick={() => speakText(turn.text, emotion, false)}
-                        aria-label={`Replay in your voice: ${turn.text}`}
+                        aria-label={t(
+                          `Replay in your voice: ${turn.text}`,
+                          `अपनी आवाज़ में फिर सुनें: ${turn.text}`,
+                        )}
                       >
                         <span>{turn.text}</span>
                         <PlayIcon />
@@ -2054,24 +2524,30 @@ export default function Home() {
             )}
             <p className="thread-status" role="status" aria-live="polite">
               {listenState === "connecting"
-                ? "Connecting to Prisma…"
+                ? t("Connecting to Prisma…", "Prisma से कनेक्ट हो रहे हैं…")
                 : listenState === "fallback"
-                  ? "Browser speech fallback is active"
-                  : status || (listenState === "live" ? "Listening · Prisma v3.0" : "")}
+                  ? t("Browser speech fallback is active", "ब्राउज़र वाक् फ़ॉलबैक सक्रिय है")
+                  : status ||
+                    (listenState === "live"
+                      ? t(
+                          `Listening in ${SUPPORTED_LANGUAGES.find((l) => l.code === listenLang)?.label || listenLang} · Prisma v3.0`,
+                          `${listenLang === "hi-en" ? "Hinglish" : SUPPORTED_LANGUAGES.find((l) => l.code === listenLang)?.native || listenLang} में सुन रहे हैं · Prisma v3.0`,
+                        )
+                      : "")}
             </p>
           </section>
 
           <div className="surface-divider" aria-hidden="true" />
 
-          <section className="surface-block" aria-label="Suggestions">
+          <section className="surface-block" aria-label={t("Suggestions", "सुझाव")}>
             <div className="block-head">
-              <span className="surface-label">Suggestions</span>
+              <span className="surface-label">{t("Suggestions", "सुझाव")}</span>
               <button
                 type="button"
                 className="icon-btn"
                 onClick={() => void loadSuggestions()}
-                aria-label="Refresh suggestions"
-                title="Refresh suggestions"
+                aria-label={t("Refresh suggestions", "सुझाव रीफ़्रेश करें")}
+                title={t("Refresh suggestions", "सुझाव रीफ़्रेश करें")}
               >
                 <RefreshIcon />
               </button>
@@ -2079,7 +2555,10 @@ export default function Home() {
             <div className="chip-scroll">
               {replies.length === 0 ? (
                 <p className="chip-empty">
-                  No suggestions yet — start listening, then tap refresh.
+                  {t(
+                    "No suggestions yet — start listening, then tap refresh.",
+                    "अभी कोई सुझाव नहीं — सुनना शुरू करें, फिर रीफ़्रेश पर टैप करें।",
+                  )}
                 </p>
               ) : (
                 replies.map((r) => (
@@ -2090,7 +2569,7 @@ export default function Home() {
                     disabled={speaking}
                     onClick={() => speakText(r.text, r.emotion)}
                   >
-                    <span className="chip-tone">{r.emotion}</span>
+                    <span className="chip-tone">{emotionLabel(r.emotion)}</span>
                     {r.text}
                   </button>
                 ))
@@ -2100,16 +2579,24 @@ export default function Home() {
 
           <div className="surface-divider" aria-hidden="true" />
 
-          <section className="surface-block" aria-label="Favourites">
+          <section className="surface-block" aria-label={t("Favourites", "पसंदीदा")}>
             <div className="block-head">
-              <span className="surface-label">Favourites</span>
+              <span className="surface-label">{t("Favourites", "पसंदीदा")}</span>
               <button
                 type="button"
                 className="icon-btn"
                 onClick={() => setFavOpen((open) => !open)}
-                aria-label={favOpen ? "Close the favourite editor" : "Add or remove favourites"}
+                aria-label={
+                  favOpen
+                    ? t("Close the favourite editor", "पसंदीदा संपादक बंद करें")
+                    : t("Add or remove favourites", "पसंदीदा जोड़ें या हटाएँ")
+                }
                 aria-expanded={favOpen}
-                title={favOpen ? "Close the favourite editor" : "Add or remove favourites"}
+                title={
+                  favOpen
+                    ? t("Close the favourite editor", "पसंदीदा संपादक बंद करें")
+                    : t("Add or remove favourites", "पसंदीदा जोड़ें या हटाएँ")
+                }
               >
                 <PlusIcon />
               </button>
@@ -2129,8 +2616,11 @@ export default function Home() {
                     <button
                       type="button"
                       className="chip-remove"
-                      aria-label={`Remove ${f.text} from favourites`}
-                      title="Remove"
+                      aria-label={t(
+                        `Remove ${f.text} from favourites`,
+                        `${f.text} को पसंदीदा से हटाएँ`,
+                      )}
+                      title={t("Remove", "हटाएँ")}
                       onClick={() => removeCustomFavourite(f.id)}
                     >
                       ×
@@ -2150,19 +2640,19 @@ export default function Home() {
                       addCustomFavourite();
                     }
                   }}
-                  placeholder="Add your own words or phrase"
+                  placeholder={t("Add your own words or phrase", "अपने शब्द या वाक्यांश जोड़ें")}
                   maxLength={80}
-                  aria-label="New favourite phrase"
+                  aria-label={t("New favourite phrase", "नया पसंदीदा वाक्यांश")}
                 />
                 <select
                   value={favEmotion}
                   onChange={(e) => setFavEmotion(e.target.value as Emotion)}
-                  aria-label="Tone for the new phrase"
+                  aria-label={t("Tone for the new phrase", "नए वाक्यांश का भाव")}
                 >
-                  <option value="warm">warm</option>
-                  <option value="calm">calm</option>
-                  <option value="urgent">urgent</option>
-                  <option value="playful">playful</option>
+                  <option value="warm">{emotionLabel("warm")}</option>
+                  <option value="calm">{emotionLabel("calm")}</option>
+                  <option value="urgent">{emotionLabel("urgent")}</option>
+                  <option value="playful">{emotionLabel("playful")}</option>
                 </select>
                 <button
                   type="button"
@@ -2170,22 +2660,26 @@ export default function Home() {
                   onClick={addCustomFavourite}
                   disabled={!favText.trim()}
                 >
-                  Add
+                  {t("Add", "जोड़ें")}
                 </button>
               </div>
             )}
           </section>
 
           {dockVisible && (
-            <div className="dock" role="region" aria-label="Reply dock">
+            <div className="dock" role="region" aria-label={t("Reply dock", "जवाब डॉक")}>
               <div className="dock-inner">
                 <button
                   type="button"
                   className={`dock-mic ${listening ? "live" : ""}`}
-                  onClick={listening ? stopListen : startListen}
+                  onClick={listening ? stopListen : () => void startListen()}
                   disabled={!listening && listenState === "connecting"}
-                  aria-label={listening ? "Stop listening" : "Start listening"}
-                  title={listening ? "Stop listening" : "Start listening"}
+                  aria-label={
+                    listening ? t("Stop listening", "सुनना बंद करें") : t("Start listening", "सुनना शुरू करें")
+                  }
+                  title={
+                    listening ? t("Stop listening", "सुनना बंद करें") : t("Start listening", "सुनना शुरू करें")
+                  }
                 >
                   {listening ? (
                     <span className="dock-stop" aria-hidden="true" />
@@ -2193,6 +2687,19 @@ export default function Home() {
                     <MicIcon />
                   )}
                 </button>
+                <span className="dock-lang" title={t("Partner speech language (STT)", "साथी की बोली की भाषा (STT)")}>
+                  <select
+                    value={listenLang}
+                    onChange={(e) => changeListenLang(e.target.value)}
+                    aria-label={t("Partner speech language", "साथी की बोली की भाषा")}
+                  >
+                    {SUPPORTED_LANGUAGES.map((l) => (
+                      <option key={l.code} value={l.code}>
+                        {l.short} · {l.label}
+                      </option>
+                    ))}
+                  </select>
+                </span>
                 <input
                   className="dock-input"
                   value={draft}
@@ -2203,19 +2710,19 @@ export default function Home() {
                       void speakText(draft, emotion);
                     }
                   }}
-                  placeholder="Type a reply"
-                  aria-label="Your reply"
+                  placeholder={t("Type a reply", "जवाब टाइप करें")}
+                  aria-label={t("Your reply", "आपका जवाब")}
                 />
                 <span className="dock-tone">
                   <select
                     value={emotion}
                     onChange={(e) => setEmotion(e.target.value as Emotion)}
-                    aria-label="Tone"
+                    aria-label={t("Tone", "भाव")}
                   >
-                    <option value="warm">warm</option>
-                    <option value="urgent">urgent</option>
-                    <option value="playful">playful</option>
-                    <option value="calm">calm</option>
+                    <option value="warm">{emotionLabel("warm")}</option>
+                    <option value="urgent">{emotionLabel("urgent")}</option>
+                    <option value="playful">{emotionLabel("playful")}</option>
+                    <option value="calm">{emotionLabel("calm")}</option>
                   </select>
                 </span>
                 <button
@@ -2223,8 +2730,8 @@ export default function Home() {
                   className="dock-send"
                   disabled={speaking || !draft.trim()}
                   onClick={() => void speakText(draft, emotion)}
-                  aria-label="Speak this reply"
-                  title="Speak this reply"
+                  aria-label={t("Speak this reply", "यह जवाब बोलें")}
+                  title={t("Speak this reply", "यह जवाब बोलें")}
                 >
                   <SendIcon />
                 </button>

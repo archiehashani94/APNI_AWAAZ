@@ -173,16 +173,21 @@ def trim_extra_groups(
     *,
     max_words: int = 3,
     max_seconds: float = 6.0,
-    keep_ms: int = 110,
+    keep_ms: int = 80,
 ) -> bytes:
-    """Drop model-generated extra speech after a short phrase.
+    """Keep the clearest rendition of a short cloned phrase.
 
-    The clone model sometimes repeats the whole phrase (``Yes. Yes.``) or adds
-    a filler syllable (``Okay. Um, okay.``). A phrase with N words should have
-    at most N speech groups, so anything after the final expected word is
-    removed, but only when a real pause separates it. Long replies are left
-    untouched, and the check requires the pause to prevent clipping a word that
-    the model merely pronounced slowly.
+    The clone model renders short replies more than once: a quiet first copy,
+    a pause, then a louder copy (``Yes. ... Yes.``). It can also prepend a soft
+    breath or ``uh``. Counting speech groups as words (the previous approach)
+    then treats the quiet pre-roll as the first word and cuts the real phrase,
+    which is why a tap could play only a stray ``ahh``.
+
+    Word counting cannot separate a pre-roll from a real word, so it is not
+    used. Instead the clip is split into renditions at long pauses and the
+    rendition with the most speech energy is kept. A real word is never cut
+    away from its own phrase because the guard requires the best rendition to
+    be long enough for the text; longer replies are left untouched.
     """
     words = [word for word in text.split() if any(ch.isalnum() for ch in word)]
     if not words or len(words) > max_words:
@@ -193,35 +198,57 @@ def trim_extra_groups(
     rate, channels, width, samples = decoded
     if len(samples) / (rate * channels) > max_seconds:
         return payload
-    analysis = _speech_groups(samples, rate, channels)
+
+    stats, frame_len, _ = _frame_stats(samples, rate, channels)
+    if len(stats) < 2:
+        return payload
+    analysis = _speech_groups(samples, rate, channels, ratio=0.10, floor_db=-50.0)
     if analysis is None:
         return payload
-    groups, _p90, frame_len, _count = analysis
-    if len(groups) <= len(words):
+    groups, _p90, _frame_len, _count = analysis
+    if len(groups) < 2:
         return payload
 
-    expected_end = groups[len(words) - 1][1]
-    extra_start = groups[len(words)][0]
-    # Only a long pause marks a genuinely repeated phrase. A shorter gap is
-    # more likely a syllable break inside a word (for example "wa-ter"), and
-    # cutting there would delete real speech.
-    if extra_start - expected_end < 10:
+    # Merge groups that belong to the same rendition. The clone puts a long
+    # pause between copies (>=240 ms in practice); words inside one copy are
+    # usually closer than 180 ms.
+    rendition_gap = max(1, 180 // 20)
+    renditions: list[list[int]] = []
+    for start, end in groups:
+        if renditions and start - renditions[-1][1] < rendition_gap:
+            renditions[-1][1] = end
+        else:
+            renditions.append([start, end])
+    if len(renditions) < 2:
         return payload
-    # The tail must itself be long enough to be a word, not a stray click.
-    if groups[-1][1] - extra_start < 8:
+
+    features = [_group_features(stats, (start, end)) for start, end in renditions]
+    best = max(features, key=lambda item: sum(
+        stats[index][0] ** 2 for index in range(int(item["start"]), int(item["end"]))
+    ))
+    # A stray click or breath is not a phrase. Require roughly 80 ms of speech
+    # per word (120 ms floor) before trusting the strongest rendition.
+    min_frames = max(6, (80 * len(words)) // 20)
+    if int(best["frames"]) < min_frames:
         return payload
-    # Never cut before the phrase has actually started, or when the expected
-    # part is just a click.
-    if expected_end < 6:
-        return payload
-    keep_frames = int(rate * keep_ms / 1000) // max(1, int(rate * 0.02))
-    cut_frame = min(extra_start, expected_end + max(0, keep_frames))
-    end_sample = min(len(samples), cut_frame * frame_len)
-    if end_sample >= len(samples) or end_sample <= 0:
-        return payload
-    return _encode_pcm16(
-        samples[:end_sample], rate=rate, channels=channels, width=width
+
+    keep_frames = max(0, keep_ms // 20)
+    start_sample = int(best["start"]) * frame_len
+    end_sample = min(
+        len(samples),
+        (int(best["end"]) + keep_frames) * frame_len,
     )
+    if start_sample <= 0 and end_sample >= len(samples):
+        return payload
+    if end_sample - start_sample <= 0:
+        return payload
+
+    out = array("h", samples[start_sample:end_sample])
+    # A cut at a rendition start can click; ease in over 8 ms.
+    fade = min(int(rate * 0.008) * channels, len(out) // channels)
+    for index in range(fade):
+        out[index] = int(out[index] * (index / fade))
+    return _encode_pcm16(out, rate=rate, channels=channels, width=width)
 
 
 def _group_features(
@@ -574,18 +601,16 @@ def trim_repeated_tail(
 def trim_trailing_silence(
     payload: bytes,
     *,
-    keep_ms: int = 120,
-    lead_ms: int = 60,
+    keep_ms: int = 80,
+    lead_ms: int = 40,
     fade_ms: int = 12,
-    ratio: float = 0.15,
-    floor_db: float = -48.0,
+    ratio: float = 0.07,
+    floor_db: float = -52.0,
 ) -> bytes:
-    """Trim near-silent edges, including the breathy tail some TTS models add.
+    """Trim near-silent edges without clipping soft consonants or keeping trailing breaths.
 
-    The clone model sometimes appends a breath, a held vowel, or a repeated
-    syllable after the sentence. That tail is much quieter than speech, so a
-    frame-level threshold relative to the speech level removes it while leaving
-    real word endings intact. A short fade-out prevents an audible click.
+    Uses a sensitive threshold relative to speech level so initial and final
+    consonants (like 'th', 'f', 's', 't') survive, with a smooth fade-out.
     Returns the input unchanged when it is not 16-bit PCM or already tight.
     """
     repaired = repair_wav_header(payload)
@@ -608,7 +633,7 @@ def trim_trailing_silence(
     if not samples:
         return payload
 
-    frame_len = max(1, int(rate * 0.02)) * channels
+    frame_len = max(1, int(rate * 0.015)) * channels
     frame_rms: list[float] = []
     for start in range(0, len(samples) - frame_len + 1, frame_len):
         chunk = samples[start : start + frame_len]
@@ -651,98 +676,331 @@ def trim_trailing_silence(
     return buffer.getvalue()
 
 
-
 def suppress_breaths(
     payload: bytes,
     *,
-    zcr_threshold: float = 0.18,
-    min_run_ms: int = 200,
-    gap_ms: int = 40,
-    level_ratio: float = 0.04,
-    floor_db: float = -50.0,
-    fade_ms: int = 6,
+    lead_margin_ms: int = 25,
+    tail_margin_ms: int = 40,
+    min_pause_ms: int = 220,
+    fade_ms: int = 10,
+    attenuation: float = 0.05,
+    **_kwargs: Any,
 ) -> bytes:
-    """Silence breathy, unvoiced runs in synthesized speech.
+    """Silence breathy, unvoiced sounds in pauses and boundaries.
 
-    The clone model learned breath noises from the reference recording and
-    reproduces them after (and sometimes between) words. A breath is broadband
-    noise: most adjacent samples cross zero, so its zero-crossing rate is high
-    (~0.3) while voiced speech stays near 0.02. Real fricatives are also
-    unvoiced but short, so only runs longer than ``min_run_ms`` are removed.
+    Breaths occur before speech begins (leading inhale), in pauses between phrases
+    (inter-speech breathing), and after the utterance ends (trailing exhale/sigh).
+    Unlike speech consonants (such as /s/, /sh/, /th/) which have high energy or
+    are tightly attached to voiced vowels within words, breath sounds sit isolated
+    within pause gaps and boundaries and lack vocal periodicity.
 
-    The run is replaced with silence (short fades on both edges to avoid
-    clicks). ``trim_trailing_silence`` then drops a silent tail, while a breath
-    between words becomes a natural short pause.
+    This function identifies true speech cores (voiced phonemes and primary syllables)
+    and expands them to encompass all contiguous consonants and plosives (up to
+    400 ms, so long fricatives survive). Breath in long inter-phrase pauses
+    (>= 220 ms) is attenuated to about -26 dB with smooth crossfades, and
+    leading/trailing breaths are cleanly trimmed with soft edge fades. Speech
+    consonants remain 100% intact.
     """
     decoded = _decode_pcm16(payload)
     if decoded is None:
         return payload
     rate, channels, width, samples = decoded
-    frame_len = max(1, int(rate * 0.02)) * channels
-    if len(samples) < frame_len * 3:
+
+    frame_ms = 10
+    frame_len = max(1, int(rate * frame_ms / 1000)) * channels
+    n_frames = len(samples) // frame_len
+    if n_frames < 6:
         return payload
 
-    frame_rms: list[float] = []
-    frame_zcr: list[float] = []
-    for start in range(0, len(samples) - frame_len + 1, frame_len):
-        chunk = samples[start : start + frame_len]
-        frame_rms.append(math.sqrt(sum(v * v for v in chunk) / len(chunk)))
-        crossings = 0
-        previous = chunk[0]
-        for value in chunk[1:]:
-            if (previous >= 0) != (value >= 0):
-                crossings += 1
-            previous = value
-        frame_zcr.append(crossings / frame_len)
+    rms_list: list[float] = []
+    ac_list: list[float] = []
 
-    ordered = sorted(frame_rms)
-    p90 = ordered[min(len(ordered) - 1, int(len(ordered) * 0.9))]
-    level_floor = max(p90 * level_ratio, 32768.0 * 10 ** (floor_db / 20.0))
-    flags = [
-        rms >= level_floor and zcr >= zcr_threshold
-        for rms, zcr in zip(frame_rms, frame_zcr)
+    min_lag = max(1, int(rate / 400)) * channels
+    max_lag = max(min_lag + 1, int(rate / 70)) * channels
+
+    for i in range(n_frames):
+        chunk = samples[i * frame_len : (i + 1) * frame_len]
+        mono = chunk[::channels] if channels > 1 else chunk
+        m_len = len(mono)
+        if m_len < 2:
+            rms_list.append(0.0)
+            ac_list.append(0.0)
+            continue
+
+        rms = math.sqrt(sum(s * s for s in mono) / m_len)
+        m = sum(mono) / m_len
+        centered = [x - m for x in mono]
+        en = sum(x * x for x in centered)
+        best_ac = 0.0
+        if en > 100:
+            limit = min(max_lag // channels, m_len // 2)
+            start_lag = min_lag // channels
+            for lag in range(start_lag, limit):
+                c = sum(centered[j] * centered[j + lag] for j in range(m_len - lag))
+                nc = c / en
+                if nc > best_ac:
+                    best_ac = nc
+
+        rms_list.append(rms)
+        ac_list.append(best_ac)
+
+    sorted_rms = sorted(rms_list)
+    p90 = sorted_rms[min(len(sorted_rms) - 1, int(len(sorted_rms) * 0.9))]
+    noise_floor = sorted_rms[min(len(sorted_rms) - 1, int(len(sorted_rms) * 0.08))]
+    if p90 <= 0:
+        return payload
+
+    # 1. Identify primary speech cores. A loud frame is not automatically
+    #    speech: a breath or sigh can reach 20% of the speech level and used to
+    #    be marked as a core, so the exact sound the clone appends after a
+    #    phrase survived every later pass. Require periodicity for anything
+    #    below full speech level; attached consonants are recovered by the
+    #    expansion step below.
+    is_core = [
+        (r >= 0.09 * p90 and ac >= 0.28) or (r >= 0.50 * p90 and ac >= 0.18)
+        for r, ac in zip(rms_list, ac_list)
     ]
-
-    gap_frames = max(0, gap_ms // 20)
-    runs: list[list[int]] = []
-    start_frame: int | None = None
-    last_active = 0
-    for index, active in enumerate(flags):
-        if active:
-            if start_frame is None:
-                start_frame = index
-            last_active = index
-        elif start_frame is not None and index - last_active > gap_frames:
-            runs.append([start_frame, last_active + 1])
-            start_frame = None
-    if start_frame is not None:
-        runs.append([start_frame, last_active + 1])
-
-    min_frames = max(1, min_run_ms // 20)
-    out = samples
-    fade = max(1, int(rate * fade_ms / 1000)) * channels
-    for run_start, run_end in runs:
-        if run_end - run_start < min_frames:
-            continue
-        begin = run_start * frame_len
-        end = min(len(out), run_end * frame_len)
-        if end <= begin:
-            continue
-        if out is samples:
-            out = array("h", samples)
-        # Fade the preceding samples down and the following samples up.
-        for index in range(max(0, begin - fade), begin):
-            gain = (begin - index) / fade
-            out[index] = int(out[index] * gain)
-        for index in range(begin, end):
-            out[index] = 0
-        for index in range(end, min(len(out), end + fade)):
-            gain = (index - end) / fade
-            out[index] = int(out[index] * gain)
-
-    if out is samples:
+    if not any(is_core):
         return payload
+
+    # 2. Expand speech boundaries forward and backward to capture connected
+    #    consonants. The window is generous but not unlimited: a 400 ms reach
+    #    swallowed whole breaths that followed a word, so they were treated as
+    #    speech and kept. 250 ms still covers normal /s/, /sh/ and /f/.
+    is_speech = list(is_core)
+    max_consonant_frames = max(1, int(250 / frame_ms))
+    consonant_floor = max(p90 * 0.025, noise_floor * 1.2, 32768.0 * 10 ** (-52.0 / 20.0))
+
+    for i in range(n_frames):
+        if is_core[i]:
+            j = i + 1
+            ext = 0
+            while j < n_frames and ext < max_consonant_frames:
+                if is_speech[j]:
+                    break
+                if rms_list[j] >= consonant_floor:
+                    is_speech[j] = True
+                    ext += 1
+                    j += 1
+                else:
+                    break
+
+    for i in range(n_frames - 1, -1, -1):
+        if is_core[i]:
+            j = i - 1
+            ext = 0
+            while j >= 0 and ext < max_consonant_frames:
+                if is_speech[j]:
+                    break
+                if rms_list[j] >= consonant_floor:
+                    is_speech[j] = True
+                    ext += 1
+                    j -= 1
+                else:
+                    break
+
+    # 3. Group speech spans with a 60 ms bridge across short stops
+    bridge_frames = max(1, int(60 / frame_ms))
+    spans: list[tuple[int, int]] = []
+    start = None
+    for i, sp in enumerate(is_speech):
+        if sp and start is None:
+            start = i
+        elif not sp and start is not None:
+            spans.append((start, i))
+            start = None
+    if start is not None:
+        spans.append((start, n_frames))
+
+    if not spans:
+        return payload
+
+    merged: list[tuple[int, int]] = [spans[0]]
+    for s, e in spans[1:]:
+        if s - merged[-1][1] <= bridge_frames:
+            merged[-1] = (merged[-1][0], e)
+        else:
+            merged.append((s, e))
+
+    speech_spans = [span for span in merged if (span[1] - span[0]) * frame_ms >= 30]
+    if not speech_spans:
+        return payload
+
+    # 4. Trim leading breath and trailing breath/sigh. Boundaries are anchored
+    #    to the first and last voiced core, not to the expanded span: expansion
+    #    deliberately reaches into consonants, and at the clip edges that reach
+    #    is what preserved a model-generated inhale/exhale. A short consonant
+    #    allowance is kept so a real initial or final /s/ is not clipped.
+    core_indices = [index for index, core in enumerate(is_core) if core]
+    first_core, last_core = core_indices[0], core_indices[-1]
+    lead_allowed = max(1, int(120 / frame_ms))
+    tail_allowed = max(1, int(200 / frame_ms))
+    lead_start_frame = max(
+        0,
+        first_core
+        - lead_allowed
+        - max(1, int(lead_margin_ms / frame_ms)),
+    )
+    tail_end_frame = min(
+        n_frames,
+        last_core
+        + tail_allowed
+        + max(1, int(tail_margin_ms / frame_ms)),
+    )
+
+    fade_frames = max(1, int(rate * fade_ms / 1000)) * channels
+    out = array("h", samples[lead_start_frame * frame_len : tail_end_frame * frame_len])
+    offset_frames = lead_start_frame
+
+    # Smooth leading edge fade-in
+    fade_in_len = min(fade_frames, len(out) // channels)
+    for i in range(fade_in_len):
+        gain = i / fade_in_len
+        for c in range(channels):
+            out[i * channels + c] = int(out[i * channels + c] * gain)
+
+    # Smooth trailing edge fade-out
+    fade_out_len = min(fade_frames, len(out) // channels)
+    for i in range(fade_out_len):
+        gain = i / fade_out_len
+        idx = len(out) - 1 - (i * channels)
+        for c in range(channels):
+            out[idx - c] = int(out[idx - c] * gain)
+
+    # 5. Silence all breath sounds in inter-speech pauses
+    pause_margin_frames = max(1, int(20 / frame_ms))
+    for idx in range(len(speech_spans) - 1):
+        prev_end = speech_spans[idx][1] - offset_frames
+        next_start = speech_spans[idx + 1][0] - offset_frames
+
+        gap_ms = (next_start - prev_end) * frame_ms
+        if gap_ms >= min_pause_ms:
+            g_start = prev_end + pause_margin_frames
+            g_end = next_start - pause_margin_frames
+            if g_end > g_start:
+                s_start = g_start * frame_len
+                s_end = g_end * frame_len
+                for i in range(fade_frames):
+                    pos = s_start - fade_frames + i
+                    if 0 <= pos < len(out):
+                        gain = 1.0 - (i / fade_frames)
+                        out[pos] = int(out[pos] * gain)
+                for pos in range(s_start, min(len(out), s_end)):
+                    out[pos] = int(out[pos] * attenuation)
+                for i in range(fade_frames):
+                    pos = s_end + i
+                    if 0 <= pos < len(out):
+                        gain = i / fade_frames
+                        out[pos] = int(out[pos] * gain)
+
     return _encode_pcm16(out, rate=rate, channels=channels, width=width)
+
+
+def enhance_speech_clarity(
+    payload: bytes,
+    *,
+    hp_cutoff_hz: float = 85.0,
+    presence_freq_hz: float = 3200.0,
+    presence_gain_db: float = 2.2,
+    target_peak_ratio: float = 0.89,
+) -> bytes:
+    """Enhance voice clarity, remove sub-bass rumble, and normalize speech volume.
+
+    1. Applies a 2nd-order Butterworth high-pass filter at 85 Hz to remove DC bias
+       and low-end muddy synthesizer rumble.
+    2. Applies a vocal presence peaking filter (+2.2 dB at 3200 Hz, Q=1.0) to bring
+       formant intelligibility and consonant articulation forward.
+    3. Peak-normalizes to -1.0 dBFS (~29,200 amplitude out of 32,768) so spoken
+       speech is consistently loud, clear, and confident without clipping.
+    """
+    decoded = _decode_pcm16(payload)
+    if decoded is None:
+        return payload
+    rate, channels, width, samples = decoded
+    if len(samples) < 100:
+        return payload
+
+    # 1. 2nd-order High-Pass Filter (85 Hz)
+    hp_f0 = max(20.0, min(hp_cutoff_hz, rate * 0.45))
+    hp_q = 0.707
+    w0 = 2.0 * math.pi * hp_f0 / rate
+    alpha = math.sin(w0) / (2.0 * hp_q)
+    b0 = (1.0 + math.cos(w0)) / 2.0
+    b1 = -(1.0 + math.cos(w0))
+    b2 = (1.0 + math.cos(w0)) / 2.0
+    a0 = 1.0 + alpha
+    a1 = -2.0 * math.cos(w0)
+    a2 = 1.0 - alpha
+
+    hp_b0, hp_b1, hp_b2 = b0 / a0, b1 / a0, b2 / a0
+    hp_a1, hp_a2 = a1 / a0, a2 / a0
+
+    # 2. Vocal presence peaking filter (3200 Hz, +2.2 dB, Q=1.0)
+    f_p = max(200.0, min(presence_freq_hz, rate * 0.45))
+    A = 10.0 ** (presence_gain_db / 40.0)
+    w0_p = 2.0 * math.pi * f_p / rate
+    alpha_p = math.sin(w0_p) / 2.0
+
+    pb0 = 1.0 + alpha_p * A
+    pb1 = -2.0 * math.cos(w0_p)
+    pb2 = 1.0 - alpha_p * A
+    pa0 = 1.0 + alpha_p / A
+    pa1 = -2.0 * math.cos(w0_p)
+    pa2 = 1.0 - alpha_p / A
+
+    pk_b0, pk_b1, pk_b2 = pb0 / pa0, pb1 / pa0, pb2 / pa0
+    pk_a1, pk_a2 = pa1 / pa0, pa2 / pa0
+
+    out = array("h", [0] * len(samples))
+
+    for ch in range(channels):
+        hp_x1 = hp_x2 = hp_y1 = hp_y2 = 0.0
+        pk_x1 = pk_x2 = pk_y1 = pk_y2 = 0.0
+
+        for idx in range(ch, len(samples), channels):
+            x = float(samples[idx])
+            # High-pass filter
+            y_hp = hp_b0 * x + hp_b1 * hp_x1 + hp_b2 * hp_x2 - hp_a1 * hp_y1 - hp_a2 * hp_y2
+            hp_x2, hp_x1 = hp_x1, x
+            hp_y2, hp_y1 = hp_y1, y_hp
+
+            # Presence boost filter
+            y_pk = pk_b0 * y_hp + pk_b1 * pk_x1 + pk_b2 * pk_x2 - pk_a1 * pk_y1 - pk_a2 * pk_y2
+            pk_x2, pk_x1 = pk_x1, y_hp
+            pk_y2, pk_y1 = pk_y1, y_pk
+
+            val = int(y_pk)
+            out[idx] = max(-32768, min(32767, val))
+
+    # 3. Peak normalization to target_peak_ratio (-1.0 dBFS)
+    peak = max(abs(s) for s in out) if out else 0
+    if peak > 0:
+        target_val = int(32768 * target_peak_ratio)
+        gain = target_val / peak
+        gain = min(gain, 4.0)
+        for i in range(len(out)):
+            val = int(out[i] * gain)
+            out[i] = max(-32768, min(32767, val))
+
+    return _encode_pcm16(out, rate=rate, channels=channels, width=width)
+
+
+def sanitize_reference_audio(payload: bytes) -> bytes:
+    """Sanitize reference recordings before generating voice clone embeddings.
+
+    Removes DC bias, silences breath noises in pauses and edges, eliminates sub-bass
+    rumble, and peak-normalizes. This prevents the cloning model from learning
+    the speaker's breath patterns.
+    """
+    cleaned = suppress_breaths(
+        payload,
+        min_pause_ms=200,
+        lead_margin_ms=20,
+        tail_margin_ms=30,
+        attenuation=0.02,
+    )
+    trimmed = trim_trailing_silence(cleaned, keep_ms=80, lead_ms=30, ratio=0.07)
+    return enhance_speech_clarity(trimmed, hp_cutoff_hz=80.0, presence_gain_db=1.5, target_peak_ratio=0.92)
 
 
 def analyze_reference(payload: bytes) -> dict[str, Any] | None:

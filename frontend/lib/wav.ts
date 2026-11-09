@@ -73,78 +73,185 @@ export function prepareVoiceSample(
 }
 
 /**
- * Silence long breath runs in a reference recording.
+ * Remove all breath sounds in reference recordings.
  *
- * A breath is broadband noise, so almost every pair of adjacent samples
- * crosses zero (zero-crossing rate ~0.3) while voiced speech sits near 0.02.
- * Fricatives are also unvoiced but brief, so only runs longer than 200 ms are
- * treated as breaths. The run is replaced with silence; if it sits between
- * words it becomes a natural pause, and at the edges `trimQuietEdges` removes
- * it entirely.
+ * Attenuates breath noise in long pauses between phrases without touching speech
+ * consonants. Uses periodicity (autocorrelation) and core-expansion VAD so voiced
+ * phonemes and connected consonants (like 's', 'sh', 'th', 'p', 't') remain 100%
+ * intact, including fricatives up to 400 ms long.
  */
 function removeBreaths(
   input: Float32Array,
   sampleRate: number,
-  zcrThreshold = 0.18,
-  minRunMs = 200,
-  levelRatio = 0.04,
+  minPauseMs = 220,
 ): Float32Array {
   if (input.length === 0) return input;
-  const frame = Math.max(1, Math.floor(sampleRate * 0.02));
+  const frameMs = 10;
+  const frame = Math.max(1, Math.floor((sampleRate * frameMs) / 1000));
   const count = Math.floor(input.length / frame);
-  if (count < 3) return input;
+  if (count < 6) return input;
 
   const rms = new Float32Array(count);
-  const zcr = new Float32Array(count);
+  const ac = new Float32Array(count);
+  const minLag = Math.max(1, Math.floor(sampleRate / 400));
+  const maxLag = Math.max(minLag + 1, Math.floor(sampleRate / 70));
+
   for (let f = 0; f < count; f++) {
     const start = f * frame;
     let sum = 0;
-    let crossings = 0;
-    let previous = input[start];
+    let mean = 0;
+    for (let i = start; i < start + frame; i++) mean += input[i];
+    mean /= frame;
+
+    let energy = 0;
     for (let i = start; i < start + frame; i++) {
-      const value = input[i];
-      sum += value * value;
-      if ((previous >= 0) !== (value >= 0)) crossings++;
-      previous = value;
+      const v = input[i];
+      sum += v * v;
+      const centered = v - mean;
+      energy += centered * centered;
     }
     rms[f] = Math.sqrt(sum / frame);
-    zcr[f] = crossings / frame;
+
+    let bestAc = 0;
+    if (energy > 1e-6) {
+      const limit = Math.min(maxLag, Math.floor(frame / 2));
+      for (let lag = minLag; lag < limit; lag++) {
+        let c = 0;
+        for (let j = start; j < start + frame - lag; j++) {
+          c += (input[j] - mean) * (input[j + lag] - mean);
+        }
+        const nc = c / energy;
+        if (nc > bestAc) bestAc = nc;
+      }
+    }
+    ac[f] = bestAc;
   }
 
   const ordered = Array.from(rms).sort((a, b) => a - b);
   const p90 = ordered[Math.min(ordered.length - 1, Math.floor(ordered.length * 0.9))];
+  const noiseFloor = ordered[Math.min(ordered.length - 1, Math.floor(ordered.length * 0.08))];
   if (p90 <= 0) return input;
-  const floor = Math.max(p90 * levelRatio, 0.002);
 
-  const runs: Array<[number, number]> = [];
-  let start = -1;
-  let lastActive = -1;
+  // 1. Identify speech cores (voiced phonemes or loud speech bursts)
+  const isCore = new Uint8Array(count);
   for (let f = 0; f < count; f++) {
-    const active = rms[f] >= floor && zcr[f] >= zcrThreshold;
-    if (active) {
-      if (start < 0) start = f;
-      lastActive = f;
-    } else if (start >= 0 && f - lastActive > 2) {
-      runs.push([start, lastActive + 1]);
-      start = -1;
+    if ((rms[f] >= 0.09 * p90 && ac[f] >= 0.28) || rms[f] >= 0.20 * p90) {
+      isCore[f] = 1;
     }
   }
-  if (start >= 0) runs.push([start, lastActive + 1]);
 
-  const minFrames = Math.max(1, Math.floor(minRunMs / 20));
-  const fade = Math.max(1, Math.floor((sampleRate * 6) / 1000));
-  let out: Float32Array | null = null;
-  for (const [runStart, runEnd] of runs) {
-    if (runEnd - runStart < minFrames) continue;
-    const begin = runStart * frame;
-    const end = Math.min(input.length, runEnd * frame);
-    if (end <= begin) continue;
-    if (!out) out = input.slice();
-    for (let i = Math.max(0, begin - fade); i < begin; i++) out[i] *= (begin - i) / fade;
-    for (let i = begin; i < end; i++) out[i] = 0;
-    for (let i = end; i < Math.min(out.length, end + fade); i++) out[i] *= (i - end) / fade;
+  // 2. Expand speech boundaries forward and backward to encompass connected
+  // consonants. Fricatives such as /s/, /sh/ and /f/ can last 300-400 ms, so a
+  // short 180 ms window used to cut the end of a long "s" and silence it as
+  // breath. That missing sibilance made the clone sound lispy and unclear.
+  const isSpeech = new Uint8Array(isCore);
+  const maxConsonantFrames = Math.max(1, Math.floor(400 / frameMs));
+  const consonantFloor = Math.max(p90 * 0.025, noiseFloor * 1.2, 0.001);
+
+  for (let i = 0; i < count; i++) {
+    if (isCore[i]) {
+      let j = i + 1;
+      let ext = 0;
+      while (j < count && ext < maxConsonantFrames) {
+        if (isSpeech[j]) break;
+        if (rms[j] >= consonantFloor) {
+          isSpeech[j] = 1;
+          ext++;
+          j++;
+        } else {
+          break;
+        }
+      }
+    }
   }
-  return out ?? input;
+
+  for (let i = count - 1; i >= 0; i--) {
+    if (isCore[i]) {
+      let j = i - 1;
+      let ext = 0;
+      while (j >= 0 && ext < maxConsonantFrames) {
+        if (isSpeech[j]) break;
+        if (rms[j] >= consonantFloor) {
+          isSpeech[j] = 1;
+          ext++;
+          j--;
+        } else {
+          break;
+        }
+      }
+    }
+  }
+
+  // 3. Group speech spans with 60 ms bridge across short stops
+  const bridgeFrames = Math.max(1, Math.floor(60 / frameMs));
+  const spans: Array<[number, number]> = [];
+  let sStart = -1;
+  for (let f = 0; f < count; f++) {
+    if (isSpeech[f]) {
+      if (sStart < 0) sStart = f;
+    } else if (sStart >= 0) {
+      spans.push([sStart, f]);
+      sStart = -1;
+    }
+  }
+  if (sStart >= 0) spans.push([sStart, count]);
+  if (spans.length === 0) return input;
+
+  const merged: Array<[number, number]> = [spans[0]];
+  for (let i = 1; i < spans.length; i++) {
+    const prev = merged[merged.length - 1];
+    const curr = spans[i];
+    if (curr[0] - prev[1] <= bridgeFrames) {
+      prev[1] = curr[1];
+    } else {
+      merged.push(curr);
+    }
+  }
+
+  // Filter out short noise clicks (< 30 ms)
+  const speechSpans = merged.filter(([s, e]) => (e - s) * frameMs >= 30);
+  if (speechSpans.length === 0) return input;
+
+  // 4. Soften breath sounds in long inter-speech pauses. Attenuate instead of
+  // hard-zeroing: abrupt digital gaps add clicks and can chop a soft consonant
+  // that the VAD only just missed.
+  const fade = Math.max(1, Math.floor((sampleRate * 10) / 1000));
+  const pauseMarginFrames = Math.max(1, Math.floor(20 / frameMs));
+  const breathGain = 0.05;
+  const out = input.slice();
+
+  for (let idx = 0; idx < speechSpans.length - 1; idx++) {
+    const prevEnd = speechSpans[idx][1];
+    const nextStart = speechSpans[idx + 1][0];
+    const gapMs = (nextStart - prevEnd) * frameMs;
+
+    if (gapMs >= minPauseMs) {
+      const gStart = prevEnd + pauseMarginFrames;
+      const gEnd = nextStart - pauseMarginFrames;
+      if (gEnd > gStart) {
+        const sStart = gStart * frame;
+        const sEnd = Math.min(out.length, gEnd * frame);
+
+        for (let i = 0; i < fade; i++) {
+          const pos = sStart - fade + i;
+          if (pos >= 0 && pos < out.length) {
+            out[pos] *= 1 - (1 - breathGain) * (i / fade);
+          }
+        }
+        for (let pos = sStart; pos < sEnd; pos++) {
+          out[pos] *= breathGain;
+        }
+        for (let i = 0; i < fade; i++) {
+          const pos = sEnd + i;
+          if (pos >= 0 && pos < out.length) {
+            out[pos] *= breathGain + (1 - breathGain) * (i / fade);
+          }
+        }
+      }
+    }
+  }
+
+  return out;
 }
 
 /** First-order high-pass to remove DC/rumble below the cutoff. */
@@ -174,11 +281,11 @@ function highPass(input: Float32Array, sampleRate: number, cutoffHz: number): Fl
 function trimQuietEdges(
   input: Float32Array,
   sampleRate: number,
-  ratio = 0.12,
-  keepMs = 100,
+  ratio = 0.06,
+  keepMs = 50,
 ): Float32Array {
   if (input.length === 0) return input;
-  const frame = Math.max(1, Math.floor(sampleRate * 0.02));
+  const frame = Math.max(1, Math.floor(sampleRate * 0.015));
   const rms: number[] = [];
   for (let start = 0; start + frame <= input.length; start += frame) {
     let sum = 0;
@@ -190,7 +297,7 @@ function trimQuietEdges(
   const ordered = [...rms].sort((a, b) => a - b);
   const p90 = ordered[Math.min(ordered.length - 1, Math.floor(ordered.length * 0.9))];
   if (p90 <= 0) return input;
-  const threshold = Math.max(p90 * ratio, 0.0015);
+  const threshold = Math.max(p90 * ratio, 0.001);
 
   let first = 0;
   while (first < rms.length && rms[first] < threshold) first++;
@@ -198,9 +305,10 @@ function trimQuietEdges(
   let last = rms.length - 1;
   while (last > first && rms[last] < threshold) last--;
 
-  const keep = Math.floor((sampleRate * keepMs) / 1000);
-  const start = Math.max(0, first * frame - keep);
-  const end = Math.min(input.length, (last + 1) * frame + keep);
+  const leadKeep = Math.floor((sampleRate * 30) / 1000);
+  const tailKeep = Math.floor((sampleRate * keepMs) / 1000);
+  const start = Math.max(0, first * frame - leadKeep);
+  const end = Math.min(input.length, (last + 1) * frame + tailKeep);
   return input.slice(start, end);
 }
 

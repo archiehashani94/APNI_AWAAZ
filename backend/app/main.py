@@ -13,7 +13,7 @@ from fastapi.responses import FileResponse, JSONResponse, Response
 from pydantic import BaseModel, Field
 from starlette.concurrency import run_in_threadpool
 
-from app.audio import analyze_reference, wav_info
+from app.audio import analyze_reference, sanitize_reference_audio, wav_info
 from app.config import BACKEND_DIR, settings
 from app.gnani.client import BudgetExceeded, GnaniError, gnani
 from app.llm.provider import suggest_with_fallback
@@ -63,6 +63,7 @@ STT_LANGUAGES = {
     "indic-auto",
     "hi-IN",
     "en-IN",
+    "hi-en",
     "ta-IN",
     "te-IN",
     "kn-IN",
@@ -91,7 +92,7 @@ def normalized_language(
     if allow_list:
         parts = [p.strip() for p in candidate.split(",")]
         if 1 <= len(parts) <= 4 and all(
-            p in STT_LANGUAGES and p != "indic-auto" for p in parts
+            p in STT_LANGUAGES and p not in {"indic-auto", "hi-en"} for p in parts
         ):
             return ",".join(parts)
     return default
@@ -312,6 +313,17 @@ async def enrol(
         for warning in quality["warnings"]:
             log.warning("enrol reference warning: %s", warning)
 
+    # Sanitize reference audio: eliminate all breath sounds, DC rumble, and normalize peak
+    clean_payload = sanitize_reference_audio(payload)
+    if clean_payload != payload:
+        log.info(
+            "Sanitized enrolment reference: removed breaths and enhanced clarity (%s -> %s bytes)",
+            len(payload),
+            len(clean_payload),
+        )
+        payload = clean_payload
+        duration = wav_duration_seconds(payload) or duration
+
     try:
         embedding = await run_in_threadpool(
             gnani.create_embeddings,
@@ -438,6 +450,7 @@ def speak(
 class SuggestBody(BaseModel):
     turns: list[dict[str, str]] | None = None
     user_gender: str | None = None
+    language: str | None = None
 
 
 def _clean_gender(value: str | None) -> str | None:
@@ -453,7 +466,10 @@ def suggest(
 ) -> dict[str, Any]:
     session = session_from(x_session_id)
     turns = body.turns if body.turns is not None else session.turns[-6:]
-    replies, fallback = suggest_with_fallback(turns, _clean_gender(body.user_gender))
+    language_hint = body.language if body.language in {"en", "hi", "hinglish"} else None
+    replies, fallback = suggest_with_fallback(
+        turns, _clean_gender(body.user_gender), language_hint
+    )
     return {
         "replies": [r.as_dict() for r in replies],
         "fallback": fallback,
@@ -617,7 +633,14 @@ async def listen(websocket: WebSocket) -> None:
         settings.stt_language,
         allow_list=True,
     )
-    output_format = websocket.query_params.get("format") or settings.stt_format
+    # Hinglish is Hindi speech written in Latin script. Prisma has no
+    # dedicated locale for it, so listen in Hindi and transliterate the output.
+    hinglish = language == "hi-en"
+    if hinglish:
+        language = "hi-IN"
+    output_format = websocket.query_params.get("format") or (
+        "transliterate" if hinglish else settings.stt_format
+    )
     if output_format not in STT_FORMATS:
         output_format = settings.stt_format
     queue: asyncio.Queue[bytes | str | None] = asyncio.Queue()

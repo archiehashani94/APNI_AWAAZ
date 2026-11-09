@@ -60,6 +60,7 @@ _CACHE_LOCK = Lock()
 def _format_transcript(
     turns: list[dict[str, str]],
     user_gender: str | None = None,
+    language_hint: str | None = None,
 ) -> str:
     lines: list[str] = []
     for turn in turns[-8:]:
@@ -91,6 +92,16 @@ def _format_transcript(
             "\nThe user's gender is unknown. Do not guess it; prefer wording that"
             " avoids gendered first-person verbs when it sounds natural."
         )
+    if language_hint == "hinglish":
+        body += (
+            "\nWrite all three replies in Hinglish: Hindi meaning in Latin/Roman"
+            " letters, the way people text (for example \"Haan, paani dijiye.\")."
+            " Do not use Devanagari."
+        )
+    elif language_hint == "hi":
+        body += "\nWrite all three replies in Devanagari Hindi."
+    elif language_hint == "en":
+        body += "\nWrite all three replies in English."
     return body
 
 
@@ -99,6 +110,7 @@ class ChatCompletionsProvider:
         self,
         turns: list[dict[str, str]],
         user_gender: str | None = None,
+        language_hint: str | None = None,
     ) -> list[ReplyOption]:
         url = (settings.llm_chat_url or "").rstrip("/")
         if not url:
@@ -111,7 +123,7 @@ class ChatCompletionsProvider:
 
         messages = [
             {"role": "system", "content": SYSTEM},
-            {"role": "user", "content": _format_transcript(turns, user_gender)},
+            {"role": "user", "content": _format_transcript(turns, user_gender, language_hint)},
         ]
         base: dict[str, Any] = {
             "model": settings.llm_model or "gpt-4o-mini",
@@ -225,14 +237,15 @@ def get_llm() -> SuggestLLM | None:
 def suggest_with_fallback(
     turns: list[dict[str, str]],
     user_gender: str | None = None,
+    language_hint: str | None = None,
 ) -> tuple[list[ReplyOption], bool]:
     llm = get_llm()
     if llm is None:
         log.info("LLM_PROVIDER=%r not configured; using canned replies", settings.llm_provider)
-        return canned_replies(turns), True
+        return canned_replies(turns, language_hint), True
 
     key = json.dumps(
-        {"turns": turns[-8:], "gender": user_gender},
+        {"turns": turns[-8:], "gender": user_gender, "language": language_hint},
         ensure_ascii=False,
         sort_keys=True,
     )
@@ -243,10 +256,10 @@ def suggest_with_fallback(
             return list(cached[1]), False
 
     try:
-        replies = llm.suggest(turns, user_gender)
+        replies = llm.suggest(turns, user_gender, language_hint)
     except Exception as exc:
         log.warning("LLM failed, using canned replies: %s", exc)
-        return canned_replies(turns), True
+        return canned_replies(turns, language_hint), True
 
     with _CACHE_LOCK:
         if len(_CACHE) > 64:

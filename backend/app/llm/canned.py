@@ -193,10 +193,17 @@ def _matches(text: str, keyword: str) -> bool:
     return re.search(rf"\b{re.escape(keyword)}\b", text) is not None
 
 
-def canned_replies(turns: list[dict[str, str]]) -> list[ReplyOption]:
+def canned_replies(
+    turns: list[dict[str, str]],
+    language_hint: str | None = None,
+) -> list[ReplyOption]:
     last = next((t.get("text", "") for t in reversed(turns) if t.get("role") == "partner"), "")
     last = last.strip()
-    language = _language(last)
+    language = (
+        language_hint
+        if language_hint in {"en", "hi", "hinglish"}
+        else _language(last)
+    )
     lowered = last.lower()
 
     if last:
