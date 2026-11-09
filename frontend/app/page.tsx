@@ -320,6 +320,27 @@ function CheckIcon() {
   );
 }
 
+function TrashIcon() {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      width="16"
+      height="16"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={1.7}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M4 7h16" />
+      <path d="M9 7V5h6v2" />
+      <path d="M6.5 7l.8 12h9.4l.8-12" />
+      <path d="M10 11v4.5M14 11v4.5" />
+    </svg>
+  );
+}
+
 /**
  * The 3D voice core sits at the centre of the page. It idles, perks up while
  * it listens, and pulses with the cloned audio while it speaks.
@@ -402,6 +423,7 @@ export default function Home() {
   const [activeVoiceId, setActiveVoiceId] = useState<string | null>(null);
   const [voiceMenuOpen, setVoiceMenuOpen] = useState(false);
   const [voiceBusy, setVoiceBusy] = useState<string | null>(null);
+  const [deleteBusy, setDeleteBusy] = useState<string | null>(null);
   const [voiceError, setVoiceError] = useState("");
   const [savingRecording, setSavingRecording] = useState(false);
   const [recordingNote, setRecordingNote] = useState("");
@@ -711,6 +733,96 @@ export default function Home() {
       );
     } finally {
       setVoiceBusy(null);
+    }
+  }
+
+  async function deleteSavedVoice(voice: SavedVoice) {
+    if (deleteBusy || voiceBusy) return;
+    const label = takeLabel(voice.seconds, voice.saved_at, uiLang);
+    if (
+      !window.confirm(
+        t(
+          `Delete ${label}? The saved MP4 recording stays, so you can clone it again.`,
+          `${label} हटाएँ? सहेजी गई MP4 रिकॉर्डिंग रहेगी, आप उसे दोबारा क्लोन कर सकते हैं।`,
+        ),
+      )
+    ) {
+      return;
+    }
+    setDeleteBusy(voice.id);
+    setVoiceError("");
+    try {
+      const res = await api(`/api/voices/${voice.id}`, sessionId, {
+        method: "DELETE",
+        headers: clientId ? { "X-Client-Id": clientId } : undefined,
+      });
+      if (!res.ok) {
+        setVoiceError(t("Could not delete that voice.", "वह आवाज़ हटाई नहीं जा सकी।"));
+        return;
+      }
+      const data: { voices?: SavedVoice[]; active?: string | null } = await res.json();
+      setSavedVoices(data.voices || []);
+      setActiveVoiceId(data.active ?? null);
+      if (voice.id === activeVoiceId) {
+        voiceVersion.current += 1;
+        favCache.current.clear();
+        if (data.active) {
+          setCloneReady(true);
+          setVoiceIssue("");
+        } else {
+          setCloneReady(false);
+          setVoiceIssue(
+            t(
+              "No saved voice left. Record a new one to speak in your own voice.",
+              "कोई सहेजी गई आवाज़ नहीं बची। अपनी आवाज़ में बोलने के लिए नई आवाज़ रिकॉर्ड करें।",
+            ),
+          );
+        }
+      }
+      setStatus(t("Voice deleted.", "आवाज़ हटा दी गई।"));
+    } catch {
+      setVoiceError(
+        t("Could not reach the voice server.", "वॉइस सर्वर से संपर्क नहीं हो सका।"),
+      );
+    } finally {
+      setDeleteBusy(null);
+    }
+  }
+
+  async function deleteRecording(rec: SavedRecording) {
+    if (deleteBusy || voiceBusy) return;
+    if (
+      !window.confirm(
+        t(
+          "Delete this saved MP4 recording? This cannot be undone.",
+          "यह सहेजी गई MP4 रिकॉर्डिंग हटाएँ? इसे वापस नहीं लाया जा सकता।",
+        ),
+      )
+    ) {
+      return;
+    }
+    setDeleteBusy(rec.name);
+    setVoiceError("");
+    try {
+      const res = await api(`/api/recordings/${encodeURIComponent(rec.name)}`, sessionId, {
+        method: "DELETE",
+        headers: clientId ? { "X-Client-Id": clientId } : undefined,
+      });
+      if (!res.ok) {
+        setVoiceError(
+          t("Could not delete that recording.", "वह रिकॉर्डिंग हटाई नहीं जा सकी।"),
+        );
+        return;
+      }
+      const data: { recordings?: SavedRecording[] } = await res.json();
+      setSavedRecordings(data.recordings || []);
+      setRecordingNote(t("MP4 recording deleted.", "MP4 रिकॉर्डिंग हटा दी गई।"));
+    } catch {
+      setVoiceError(
+        t("Could not reach the voice server.", "वॉइस सर्वर से संपर्क नहीं हो सका।"),
+      );
+    } finally {
+      setDeleteBusy(null);
     }
   }
 
@@ -2132,6 +2244,23 @@ export default function Home() {
                         <a href={`${API_URL}${recording.url}`} download={recording.name}>
                           {t("Download MP4", "MP4 डाउनलोड करें")}
                         </a>
+                        <button
+                          type="button"
+                          className="recording-delete"
+                          onClick={() => void deleteRecording(recording)}
+                          disabled={deleteBusy !== null || voiceBusy !== null}
+                          aria-label={t(
+                            "Delete this recording",
+                            "यह रिकॉर्डिंग हटाएँ",
+                          )}
+                          title={t("Delete this recording", "यह रिकॉर्डिंग हटाएँ")}
+                        >
+                          {deleteBusy === recording.name ? (
+                            <span className="voice-delete-busy" aria-hidden="true" />
+                          ) : (
+                            <TrashIcon />
+                          )}
+                        </button>
                       </div>
                       <audio
                         controls
@@ -2306,36 +2435,57 @@ export default function Home() {
               {savedVoices.map((voice) => {
                 const active = voice.id === activeVoiceId;
                 return (
-                  <button
-                    type="button"
+                  <div
                     key={voice.id}
-                    className={`voice-row ${active ? "active" : ""}`}
-                    onClick={() => void selectVoice(voice)}
-                    disabled={voiceBusy !== null}
-                    aria-pressed={active}
+                    className={`voice-row-wrap ${active ? "active" : ""}`}
                   >
-                    <span className="voice-row-main">
-                      <span className="voice-row-title">
-                        {takeLabel(voice.seconds, voice.saved_at, uiLang)}
+                    <button
+                      type="button"
+                      className={`voice-row ${active ? "active" : ""}`}
+                      onClick={() => void selectVoice(voice)}
+                      disabled={voiceBusy !== null || deleteBusy !== null}
+                      aria-pressed={active}
+                    >
+                      <span className="voice-row-main">
+                        <span className="voice-row-title">
+                          {takeLabel(voice.seconds, voice.saved_at, uiLang)}
+                        </span>
+                        <span className="voice-row-meta">
+                          {voice.recording
+                            ? t("From a saved recording", "सहेजी गई रिकॉर्डिंग से")
+                            : t("Saved clone", "सहेजा गया क्लोन")}
+                        </span>
                       </span>
-                      <span className="voice-row-meta">
-                        {voice.recording
-                          ? t("From a saved recording", "सहेजी गई रिकॉर्डिंग से")
-                          : t("Saved clone", "सहेजा गया क्लोन")}
+                      <span className="voice-row-act">
+                        {active ? (
+                          <>
+                            <CheckIcon /> {t("In use", "उपयोग में")}
+                          </>
+                        ) : voiceBusy === voice.id ? (
+                          t("Switching…", "स्विच हो रहा है…")
+                        ) : (
+                          t("Use", "इस्तेमाल करें")
+                        )}
                       </span>
-                    </span>
-                    <span className="voice-row-act">
-                      {active ? (
-                        <>
-                          <CheckIcon /> {t("In use", "उपयोग में")}
-                        </>
-                      ) : voiceBusy === voice.id ? (
-                        t("Switching…", "स्विच हो रहा है…")
-                      ) : (
-                        t("Use", "इस्तेमाल करें")
+                    </button>
+                    <button
+                      type="button"
+                      className="voice-delete"
+                      onClick={() => void deleteSavedVoice(voice)}
+                      disabled={deleteBusy !== null || voiceBusy !== null}
+                      aria-label={t(
+                        `Delete ${takeLabel(voice.seconds, voice.saved_at, uiLang)}`,
+                        `${takeLabel(voice.seconds, voice.saved_at, uiLang)} हटाएँ`,
                       )}
-                    </span>
-                  </button>
+                      title={t("Delete this voice", "यह आवाज़ हटाएँ")}
+                    >
+                      {deleteBusy === voice.id ? (
+                        <span className="voice-delete-busy" aria-hidden="true" />
+                      ) : (
+                        <TrashIcon />
+                      )}
+                    </button>
+                  </div>
                 );
               })}
               {unclonedRecordings.map((rec) => (

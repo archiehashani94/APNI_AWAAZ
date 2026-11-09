@@ -179,6 +179,37 @@ def set_current_voice(client_id: str | None, voice_id: str | None) -> None:
         log.warning("could not persist the selected voice: %s", exc)
 
 
+def clear_current_voice(client_id: str | None) -> None:
+    """Forget the remembered selection after its voice is deleted."""
+    path = _current_path(client_id)
+    if path is None:
+        return
+    try:
+        path.unlink(missing_ok=True)
+    except OSError as exc:
+        log.warning("could not clear the selected voice: %s", exc)
+
+
+def delete_voice(client_id: str | None, voice_id: str | None) -> bool:
+    """Delete one saved clone. Returns True when a file was removed."""
+    path = (
+        _legacy_path(client_id)
+        if voice_id == LEGACY_ID
+        else _voice_path(client_id, voice_id)
+    )
+    if path is None or not path.is_file():
+        return False
+    try:
+        path.unlink()
+    except OSError as exc:
+        log.warning("could not delete clone embedding: %s", exc)
+        return False
+    if current_voice_id(client_id) == voice_id:
+        clear_current_voice(client_id)
+    log.info("deleted clone embedding %s for client %s", voice_id, (client_id or "")[:8])
+    return True
+
+
 def load_voice(
     client_id: str | None,
     voice_id: str | None = None,

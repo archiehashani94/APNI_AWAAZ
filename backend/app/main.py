@@ -19,12 +19,21 @@ from app.gnani.client import BudgetExceeded, GnaniError, gnani
 from app.llm.provider import suggest_with_fallback
 from app.recordings import (
     RecordingError,
+    delete_recording,
     list_recordings,
     resolve_recording,
     save_recording,
 )
 from app.store import store
-from app.voices import current_voice_id, list_voices, load_voice, save_voice, set_current_voice
+from app.voices import (
+    clear_current_voice,
+    current_voice_id,
+    delete_voice,
+    list_voices,
+    load_voice,
+    save_voice,
+    set_current_voice,
+)
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("apni_awaaz")
@@ -527,6 +536,17 @@ def recording_file(name: str, inline: bool = False) -> FileResponse:
     )
 
 
+@app.delete("/api/recordings/{name}")
+def delete_voice_recording(
+    name: str,
+    x_client_id: Annotated[str | None, Header()] = None,
+) -> dict[str, Any]:
+    """Delete one saved MP4 take for this browser."""
+    if not delete_recording(x_client_id, name):
+        raise HTTPException(404, "Recording not found")
+    return {"ok": True, "recordings": list_recordings(x_client_id)}
+
+
 @app.get("/api/voices")
 def voices(
     x_client_id: Annotated[str | None, Header()] = None,
@@ -589,6 +609,41 @@ def use_saved_voice(
     session.voice_id = voice_id
     set_current_voice(x_client_id, voice_id)
     return {"ok": True, "clone_ready": True, "voice_id": voice_id}
+
+
+@app.delete("/api/voices/{voice_id}")
+def delete_saved_voice(
+    voice_id: str,
+    x_session_id: Annotated[str | None, Header()] = None,
+    x_client_id: Annotated[str | None, Header()] = None,
+) -> dict[str, Any]:
+    """Delete a saved clone. If it was in use, fall back to another take."""
+    if not delete_voice(x_client_id, voice_id):
+        raise HTTPException(404, "Saved voice not found")
+    remaining = list_voices(x_client_id)
+    next_id = remaining[0]["id"] if remaining else None
+    session = store.get(x_session_id or "")
+    if session is not None and session.voice_id == voice_id:
+        if next_id:
+            embedding = load_voice(x_client_id, next_id)
+            session.speaker_embedding = embedding
+            session.clone_ready = embedding is not None
+            session.using_stock_voice = embedding is None
+            session.voice_id = next_id
+            set_current_voice(x_client_id, next_id)
+        else:
+            session.speaker_embedding = None
+            session.clone_ready = False
+            session.using_stock_voice = True
+            session.voice_id = None
+            clear_current_voice(x_client_id)
+    return {
+        "ok": True,
+        "voices": remaining,
+        "active": (
+            session.voice_id if session is not None else current_voice_id(x_client_id)
+        ),
+    }
 
 
 @app.get("/api/credits")

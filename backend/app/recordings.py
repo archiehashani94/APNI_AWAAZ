@@ -139,3 +139,21 @@ def resolve_recording(name: str) -> Path | None:
     if path.parent != directory or not path.is_file():
         return None
     return path
+
+
+def delete_recording(client_id: str | None, name: str) -> bool:
+    """Delete one of this browser's saved MP4 takes, plus its sidecar."""
+    path = resolve_recording(name)
+    if path is None:
+        return False
+    prefix = f"voice-{_client_slug(client_id)}-"
+    if not path.name.startswith(prefix):
+        return False
+    try:
+        path.unlink()
+        path.with_suffix(".json").unlink(missing_ok=True)
+    except OSError as exc:
+        log.warning("could not delete recording: %s", exc)
+        return False
+    log.info("deleted recording %s", path.name)
+    return True

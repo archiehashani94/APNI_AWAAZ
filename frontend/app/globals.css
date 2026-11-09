@@ -830,6 +830,71 @@ code {
   color: var(--color-accent);
 }
 
+.voice-row-wrap {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2xs);
+  border-bottom: var(--rule-hair) solid var(--color-rule);
+}
+
+.voice-row-wrap:last-of-type {
+  border-bottom: 0;
+}
+
+.voice-row-wrap.active {
+  background: var(--color-accent-soft);
+}
+
+.voice-row-wrap .voice-row {
+  flex: 1;
+  border-bottom: 0;
+}
+
+.voice-delete,
+.recording-delete {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  border: var(--rule-hair) solid transparent;
+  border-radius: var(--radius-part);
+  background: transparent;
+  color: var(--color-muted);
+}
+
+.voice-delete:hover:not(:disabled),
+.recording-delete:hover:not(:disabled) {
+  border-color: var(--color-error);
+  background: var(--color-error-surface);
+  color: var(--color-error);
+}
+
+.voice-delete:disabled,
+.recording-delete:disabled {
+  border-color: var(--color-rule);
+  background: var(--color-paper-3);
+  color: var(--color-muted);
+  cursor: not-allowed;
+}
+
+.voice-delete-busy {
+  width: 14px;
+  height: 14px;
+  border: 2px solid var(--color-rule-2);
+  border-top-color: var(--color-accent);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 .thread {
   display: flex;
   flex-direction: column;
