@@ -1,0 +1,23 @@
+{
+  "scanned": "2026-11-09",
+  "findings": {
+    "fonts": "Inter (--font-sans) and JetBrains Mono (--font-mono) via next/font/google, frontend/app/layout.tsx L2-15",
+    "palette": "Warm brown/gold literals in frontend/app/globals.css :root L1-17; 119 colour literals outside the token block",
+    "motion": "CSS transitions and keyframes only (eqBar, dotPulse, dotBreathe, recordPulse, dockIn), frontend/app/globals.css",
+    "spacing": "Ad-hoc rem values throughout frontend/app/globals.css; no spacing scale",
+    "framework": "Next.js 15 app router, React 19, Three.js 0.175 (frontend/package.json)"
+  },
+  "preserve": [
+    "every feature and every piece of content",
+    "every link, form, field, handler, route, id, key and test hook",
+    "AnomalyOrb.tsx untouched",
+    "English/Hindi UI switching, Hinglish STT, favourites, suggestions, voice enrolment and conversation controls",
+    "the backend API calls and WebSocket wiring"
+  ],
+  "introduce": [
+    "Ribbon theme, two-in-the-morning colourway",
+    "app-shell composition: sticky top bar, voice-core rail, task stage",
+    "tokens.css and base.css beside globals.css",
+    "sentence-case labels, one primary control recipe, 40px app controls"
+  ]
+}

@@ -180,10 +180,10 @@ function takeLabel(seconds: number | null, at: number, lang: UiLang = "en"): str
   });
   if (seconds) {
     return lang === "hi"
-      ? `${Math.round(seconds)} सेकंड का टेक · ${when}`
-      : `${Math.round(seconds)}s take · ${when}`;
+      ? `${Math.round(seconds)} सेकंड का टेक, ${when}`
+      : `${Math.round(seconds)}s take, ${when}`;
   }
-  return lang === "hi" ? `सहेजी गई आवाज़ · ${when}` : `Saved voice · ${when}`;
+  return lang === "hi" ? `सहेजी गई आवाज़, ${when}` : `Saved voice, ${when}`;
 }
 
 function getClientId(): string {
@@ -348,19 +348,7 @@ function VoiceCore({
   return (
     <div className="voice-core">
       <div className="orb-stage">
-        <div className="orb-rings" aria-hidden="true">
-          <span />
-          <span />
-          <span />
-        </div>
         <AnomalyOrb mood={mood} />
-      </div>
-      <div className={`equalizer ${mood}`} aria-hidden="true">
-        <span />
-        <span />
-        <span />
-        <span />
-        <span />
       </div>
       <p className="orb-caption" role="status" aria-live="polite">
         <span className={`status-dot ${mood}`} aria-hidden="true" />
@@ -418,10 +406,10 @@ export default function Home() {
   const [savingRecording, setSavingRecording] = useState(false);
   const [recordingNote, setRecordingNote] = useState("");
   const [thread, setThread] = useState<Turn[]>([]);
-  const [heroInView, setHeroInView] = useState(true);
   const [favOpen, setFavOpen] = useState(false);
   const [uiLang, setUiLang] = useState<UiLang>("en");
   const [uploading, setUploading] = useState(false);
+  const [consentBusy, setConsentBusy] = useState<"" | "consent" | "demo">("");
 
   const t = (en: string, hi: string) => (uiLang === "hi" ? hi : en);
   const emotionLabel = (emo: Emotion) =>
@@ -649,26 +637,13 @@ export default function Home() {
     const tick = () => {
       if (!clockRef.current) return;
       const now = new Date();
-      const prefix = uiLang === "hi" ? "समय" : "TIME";
+      const prefix = uiLang === "hi" ? "समय" : "Time";
       clockRef.current.textContent = `${prefix} ${now.toLocaleTimeString("en-GB", { hour12: false })}`;
     };
     tick();
     const id = window.setInterval(tick, 1000);
     return () => window.clearInterval(id);
   }, [uiLang]);
-
-  // The dock only appears once the hero has scrolled away. The hero markup is
-  // observed from the outside so its component stays untouched.
-  useEffect(() => {
-    const hero = document.querySelector(".hero");
-    if (!hero || typeof IntersectionObserver === "undefined") return;
-    const observer = new IntersectionObserver(
-      ([entry]) => setHeroInView(entry.isIntersecting),
-      { threshold: 0 },
-    );
-    observer.observe(hero);
-    return () => observer.disconnect();
-  }, []);
 
   function scrollToThread() {
     threadRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
@@ -827,20 +802,28 @@ export default function Home() {
   }
 
   async function submitConsent() {
+    if (consentBusy) return;
+    setConsentBusy("consent");
     setError("");
-    const res = await api("/api/consent", sessionId, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ agreed: true }),
-    });
-    if (!res.ok) {
-      setError(await res.text());
-      return;
+    try {
+      const res = await api("/api/consent", sessionId, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ agreed: true }),
+      });
+      if (!res.ok) {
+        setError(await res.text());
+        return;
+      }
+      setStage("enrol");
+    } finally {
+      setConsentBusy("");
     }
-    setStage("enrol");
   }
 
   async function startDemo() {
+    if (consentBusy) return;
+    setConsentBusy("demo");
     setError("");
     try {
       await api("/api/consent", sessionId, {
@@ -863,6 +846,8 @@ export default function Home() {
       refreshCredits();
     } catch (err) {
       setError(String(err));
+    } finally {
+      setConsentBusy("");
     }
   }
 
@@ -1025,8 +1010,8 @@ export default function Home() {
       setRecState("idle");
       setError(
         t(
-          `Only ${rawDuration.toFixed(1)}s recorded. Record at least 5 seconds, ideally 20–30 seconds.`,
-          `केवल ${rawDuration.toFixed(1)} सेकंड रिकॉर्ड हुए। कम से कम 5 सेकंड, बेहतर हो 20–30 सेकंड रिकॉर्ड करें।`,
+          `Only ${rawDuration.toFixed(1)}s recorded. Record at least 5 seconds, ideally 20 to 30 seconds.`,
+          `केवल ${rawDuration.toFixed(1)} सेकंड रिकॉर्ड हुए। कम से कम 5 सेकंड, बेहतर हो 20 से 30 सेकंड रिकॉर्ड करें।`,
         ),
       );
       return;
@@ -1091,8 +1076,8 @@ export default function Home() {
     setStatus(
       quality.warnings.length
         ? t(
-            `Recorded ${preparedDuration.toFixed(1)}s, but the reference has problems — read the notes below before using it.`,
-            `${preparedDuration.toFixed(1)} सेकंड रिकॉर्ड हुए, लेकिन रेफ़रेंस में समस्याएँ हैं — इस्तेमाल से पहले नीचे दिए नोट्स पढ़ें।`,
+            `Recorded ${preparedDuration.toFixed(1)}s, but the reference has problems. Read the notes below before using it.`,
+            `${preparedDuration.toFixed(1)} सेकंड रिकॉर्ड हुए, लेकिन रेफ़रेंस में समस्याएँ हैं। इस्तेमाल से पहले नीचे दिए नोट्स पढ़ें।`,
           )
         : t(
             `Recorded ${preparedDuration.toFixed(1)}s of speech. Listen to the preview, then tap "Use this voice".`,
@@ -1168,8 +1153,8 @@ export default function Home() {
         setStatus(
           warnings.length
             ? t(
-                "Clone ready, but the reference audio has problems — see the notes above the speak box.",
-                "क्लोन तैयार है, लेकिन रेफ़रेंस ऑडियो में समस्याएँ हैं — बोलने के बॉक्स के ऊपर दिए नोट्स देखें।",
+                "Clone ready, but the reference audio has problems. See the notes above the speak box.",
+                "क्लोन तैयार है, लेकिन रेफ़रेंस ऑडियो में समस्याएँ हैं। बोलने के बॉक्स के ऊपर दिए नोट्स देखें।",
               )
             : t(
                 "Clone ready. Tap “Test this voice” to check that it sounds like you.",
@@ -1276,8 +1261,8 @@ export default function Home() {
       if (duration < 5) {
         setError(
           t(
-            `This file has only ${duration.toFixed(1)}s of audible speech. Use at least 5 seconds, ideally 20–30.`,
-            `इस फ़ाइल में केवल ${duration.toFixed(1)} सेकंड की सुनाई देने वाली बोली है। कम से कम 5 सेकंड, बेहतर हो 20–30 सेकंड इस्तेमाल करें।`,
+            `This file has only ${duration.toFixed(1)}s of audible speech. Use at least 5 seconds, ideally 20 to 30.`,
+            `इस फ़ाइल में केवल ${duration.toFixed(1)} सेकंड की सुनाई देने वाली बोली है। कम से कम 5 सेकंड, बेहतर हो 20 से 30 सेकंड इस्तेमाल करें।`,
           ),
         );
         setStatus("");
@@ -1302,8 +1287,8 @@ export default function Home() {
       setStatus(
         quality.warnings.length
           ? t(
-              `Loaded ${duration.toFixed(1)}s, but the reference has problems — read the notes below before using it.`,
-              `${duration.toFixed(1)} सेकंड लोड हुए, लेकिन रेफ़रेंस में समस्याएँ हैं — इस्तेमाल से पहले नीचे दिए नोट्स पढ़ें।`,
+              `Loaded ${duration.toFixed(1)}s, but the reference has problems. Read the notes below before using it.`,
+              `${duration.toFixed(1)} सेकंड लोड हुए, लेकिन रेफ़रेंस में समस्याएँ हैं। इस्तेमाल से पहले नीचे दिए नोट्स पढ़ें।`,
             )
           : t(
               `Loaded ${duration.toFixed(1)}s of speech from ${file.name}. Preview it, then tap "Use this voice".`,
@@ -1913,7 +1898,7 @@ export default function Home() {
         )}
         <span className="orb-action-label">
           {recState === "recording"
-            ? t(`Stop · ${seconds}s`, `रोकें · ${seconds}से`)
+            ? t(`Stop ${seconds}s`, `रोकें ${seconds}से`)
             : previewUrl
               ? t("Record again", "दोबारा रिकॉर्ड करें")
               : t("Record your voice", "अपनी आवाज़ रिकॉर्ड करें")}
@@ -1946,7 +1931,7 @@ export default function Home() {
         )}
         <span className="orb-action-label">
           {listening
-            ? t("Listening · tap to stop", "सुन रहे हैं · रोकने के लिए टैप करें")
+            ? t("Listening. Tap to stop.", "सुन रहे हैं। रोकने के लिए टैप करें।")
             : listenState === "connecting"
               ? t("Connecting…", "कनेक्ट हो रहे हैं…")
               : t("Start listening", "सुनना शुरू करें")}
@@ -1956,14 +1941,10 @@ export default function Home() {
 
   return (
     <main className="site">
-      <div className="space-bg" aria-hidden="true" />
-      <div className="grid-overlay" aria-hidden="true" />
+      <div className="ambient" aria-hidden="true" />
       <div className="wrap">
         <div className="topbar">
-          <span className="logo">
-            <span className="logo-mark" aria-hidden="true" />
-            APNI AWAAZ
-          </span>
+          <span className="logo">Apni Awaaz</span>
           <div className="topbar-right">
             <div
               className="ui-lang"
@@ -1987,87 +1968,41 @@ export default function Home() {
                 हिन्दी
               </button>
             </div>
-            <span className={`topbar-pill ${cloneReady ? "on" : ""}`}>
-              {cloneReady
-                ? t("CLONE ONLINE", "क्लोन ऑनलाइन")
-                : t("CLONE PENDING", "क्लोन लंबित")}
-            </span>
             <span ref={clockRef} className="topbar-time">
-              TIME --:--:--
+              Time --:--:--
             </span>
           </div>
         </div>
-        <header className="hero">
-          <div className="hero-copy">
-            <span className="eyebrow">
-              APNI AWAAZ <i>//</i> {t("VOICE SYNTHESIS", "वॉइस सिंथेसिस")}
-            </span>
-            <h1>
-              {t("Give your", "अपनी आवाज़")}
-              <br />
-              {t("voice back", "वापस पाएँ")}
-            </h1>
-            <p className="lede">
-              {t(
-                "Type or tap a reply. The core speaks it in a clone of your voice — one take, kept across restarts, no re-recording.",
-                "जवाब टाइप करें या टैप करें। यह केंद्र आपकी आवाज़ के क्लोन में उसे बोलता है — एक ही टेक, रीस्टार्ट के बाद भी सुरक्षित, दोबारा रिकॉर्डिंग नहीं।",
-              )}
-            </p>
-            <div className="hero-meta">
-              <span className={`meta ${cloneReady ? "good" : ""}`}>
-                {cloneReady
-                  ? t("CLONE READY", "क्लोन तैयार")
-                  : t("CLONE PENDING", "क्लोन लंबित")}
-              </span>
-              <span className="meta">
-                {listenState === "live"
-                  ? t("INPUT LIVE", "इनपुट लाइव")
-                  : t("INPUT IDLE", "इनपुट निष्क्रिय")}
-              </span>
+        <div className="workspace">
+          <header className="hero">
+            <div className="hero-copy">
+              <h1>
+                {t("Give your", "अपनी आवाज़")}
+                <br />
+                {t("voice back", "वापस पाएँ")}
+              </h1>
+              <p className="lede">
+                {t(
+                  "Type or tap a reply. The core speaks it in a clone of your voice: one take, kept across restarts, no re-recording.",
+                  "जवाब टाइप करें या टैप करें। यह केंद्र आपकी आवाज़ के क्लोन में उसे बोलता है: एक ही टेक, रीस्टार्ट के बाद भी सुरक्षित, दोबारा रिकॉर्डिंग नहीं।",
+                )}
+              </p>
             </div>
-          </div>
-          <VoiceCore mood={mood} action={heroAction} lang={uiLang} />
-          <aside
-            className="hero-panel"
-            aria-label={t("Voice core status", "वॉइस कोर स्थिति")}
-          >
-            <div className="hero-panel-title">{t("VOICE CORE", "वॉइस कोर")}</div>
-            <div className="status-item">
-              <span>{t("Clone", "क्लोन")}</span>
-              <strong>{cloneReady ? t("Ready", "तैयार") : t("Pending", "लंबित")}</strong>
+            <VoiceCore mood={mood} action={heroAction} lang={uiLang} />
+          </header>
+          <div className="stage">
+            <div className="tag-row">
+              {aiLabel && <span className="badge">{t("AI-generated audio", "AI से बनाई ऑडियो")}</span>}
+              {fallbacks.map((f) => (
+                <span className="badge warn" key={f}>
+                  {t("Fallback: ", "फ़ॉलबैक: ")}
+                  {FALLBACK_LABELS[f]
+                    ? t(FALLBACK_LABELS[f].en, FALLBACK_LABELS[f].hi)
+                    : f.replaceAll("_", " ")}
+                </span>
+              ))}
+              {credits && <span className="badge">{credits}</span>}
             </div>
-            <div className="status-item">
-              <span>{t("Input", "इनपुट")}</span>
-              <strong>
-                {listenState === "live" ? t("Live", "लाइव") : t("Idle", "निष्क्रिय")}
-              </strong>
-            </div>
-            <div className="status-item">
-              <span>{t("Engine", "इंजन")}</span>
-              <strong>Gnani Timbre</strong>
-            </div>
-            <div className="status-item">
-              <span>{t("Language", "भाषा")}</span>
-              <strong>{speakLang === "auto" ? t("Auto", "ऑटो") : speakLang}</strong>
-            </div>
-            <div className="status-item">
-              <span>{t("Spend", "खर्च")}</span>
-              <strong>{credits || "—"}</strong>
-            </div>
-          </aside>
-        </header>
-        <div className="row" style={{ marginBottom: "1rem" }}>
-        {aiLabel && <span className="badge">{t("AI-generated audio", "AI से बनाई ऑडियो")}</span>}
-        {fallbacks.map((f) => (
-          <span className="badge warn" key={f}>
-            {t("Fallback: ", "फ़ॉलबैक: ")}
-            {FALLBACK_LABELS[f]
-              ? t(FALLBACK_LABELS[f].en, FALLBACK_LABELS[f].hi)
-              : f.replaceAll("_", " ")}
-          </span>
-        ))}
-        {credits && <span className="badge">{credits}</span>}
-      </div>
       {error && <p className="error">{error}</p>}
 
       {stage === "consent" && (
@@ -2083,11 +2018,24 @@ export default function Home() {
             </span>
           </label>
           <div className="row" style={{ marginTop: "1rem" }}>
-            <button disabled={!agreed || !sessionId} onClick={submitConsent}>
-              {t("Continue", "जारी रखें")}
+            <button
+              type="button"
+              disabled={!agreed || !sessionId || consentBusy !== ""}
+              onClick={submitConsent}
+            >
+              {consentBusy === "consent"
+                ? t("Starting…", "शुरू हो रहा है…")
+                : t("Continue", "जारी रखें")}
             </button>
-            <button className="secondary" disabled={!agreed || !sessionId} onClick={startDemo}>
-              {t("One-click demo", "वन-क्लिक डेमो")}
+            <button
+              type="button"
+              className="secondary"
+              disabled={!agreed || !sessionId || consentBusy !== ""}
+              onClick={startDemo}
+            >
+              {consentBusy === "demo"
+                ? t("Starting demo…", "डेमो शुरू हो रहा है…")
+                : t("One-click demo", "वन-क्लिक डेमो")}
             </button>
           </div>
         </section>
@@ -2098,8 +2046,8 @@ export default function Home() {
           <h2>{t("Voice enrolment", "आवाज़ एनरोलमेंट")}</h2>
           <p className="lede">
             {t(
-              "Record 15–30 seconds of natural speech in a quiet room. Use one person only — no music, no singing, no TV, no second voice. Speak the same language you will use for replies. A clean, close-mic take makes the biggest difference to how closely the clone matches you.",
-              "शांत कमरे में 15–30 सेकंड की सहज बोली रिकॉर्ड करें। केवल एक व्यक्ति — कोई संगीत, गाना, टीवी या दूसरी आवाज़ नहीं। वही भाषा बोलें जिसका इस्तेमाल आप जवाबों के लिए करेंगे। साफ़, माइक के पास की रिकॉर्डिंग क्लोन को आपसे सबसे ज़्यादा मिलती-जुलती बनाती है।",
+              "Record 15 to 30 seconds of natural speech in a quiet room. Use one person only: no music, no singing, no TV, no second voice. Speak the same language you will use for replies. A clean, close-mic take makes the biggest difference to how closely the clone matches you.",
+              "शांत कमरे में 15 से 30 सेकंड की सहज बोली रिकॉर्ड करें। केवल एक व्यक्ति: कोई संगीत, गाना, टीवी या दूसरी आवाज़ नहीं। वही भाषा बोलें जिसका इस्तेमाल आप जवाबों के लिए करेंगे। साफ़, माइक के पास की रिकॉर्डिंग क्लोन को आपसे सबसे ज़्यादा मिलती-जुलती बनाती है।",
             )}
           </p>
           <p className="meter">
@@ -2152,8 +2100,8 @@ export default function Home() {
               <p className="meter">
                 <strong>{t("Saved recordings", "सहेजी गई रिकॉर्डिंग")}</strong>
                 {t(
-                  " — every take is kept as an MP4 file on the server. Tap “Use this voice” to switch back to an earlier take without recording again.",
-                  " — हर टेक सर्वर पर MP4 फ़ाइल के रूप में रखा जाता है। बिना दोबारा रिकॉर्ड किए पुराने टेक पर लौटने के लिए “इस आवाज़ का उपयोग करें” पर टैप करें।",
+                  ". Every take is kept as an MP4 file on the server. Tap “Use this voice” to switch back to an earlier take without recording again.",
+                  ". हर टेक सर्वर पर MP4 फ़ाइल के रूप में रखा जाता है। बिना दोबारा रिकॉर्ड किए पुराने टेक पर लौटने के लिए “इस आवाज़ का उपयोग करें” पर टैप करें।",
                 )}
               </p>
               {voiceError && (
@@ -2230,7 +2178,7 @@ export default function Home() {
             </div>
           )}
           <div className="level" aria-hidden="true">
-            <div style={{ width: `${recLevel}%` }} />
+            <div style={{ transform: `scaleX(${recLevel / 100})` }} />
           </div>
           <p className="meter">
             {recState === "recording"
@@ -2253,7 +2201,7 @@ export default function Home() {
                   <p>
                     <strong>
                       {t("This reference may clone poorly", "यह रेफ़रेंस खराब क्लोन बन सकता है")}
-                      {previewScore !== null ? ` · ${previewScore}/100` : ""}
+                      {previewScore !== null ? ` (${previewScore}/100)` : ""}
                     </strong>
                   </p>
                   <ul>
@@ -2263,8 +2211,8 @@ export default function Home() {
                   </ul>
                   <p className="meter">
                     {t(
-                      "Fix the issue and record or upload again — the clone can only be as good as this clip.",
-                      "समस्या ठीक करें और दोबारा रिकॉर्ड या अपलोड करें — क्लोन इस क्लिप जितना ही अच्छा हो सकता है।",
+                      "Fix the issue and record or upload again. The clone can only be as good as this clip.",
+                      "समस्या ठीक करें और दोबारा रिकॉर्ड या अपलोड करें। क्लोन इस क्लिप जितना ही अच्छा हो सकता है।",
                     )}
                   </p>
                 </div>
@@ -2333,7 +2281,6 @@ export default function Home() {
                 onClick={startNewRecording}
                 disabled={uploading}
               >
-                <span className="rec-dot" aria-hidden="true" />
                 {t("Record a new voice", "नई आवाज़ रिकॉर्ड करें")}
               </button>
             </div>
@@ -2404,7 +2351,7 @@ export default function Home() {
                       {takeLabel(rec.seconds, rec.created_at, uiLang)}
                     </span>
                     <span className="voice-row-meta">
-                      {t("Recording · not cloned yet", "रिकॉर्डिंग · अभी क्लोन नहीं हुई")}
+                      {t("Recording, not cloned yet", "रिकॉर्डिंग, अभी क्लोन नहीं हुई")}
                     </span>
                   </span>
                   <span className="voice-row-act">
@@ -2530,8 +2477,8 @@ export default function Home() {
                   : status ||
                     (listenState === "live"
                       ? t(
-                          `Listening in ${SUPPORTED_LANGUAGES.find((l) => l.code === listenLang)?.label || listenLang} · Prisma v3.0`,
-                          `${listenLang === "hi-en" ? "Hinglish" : SUPPORTED_LANGUAGES.find((l) => l.code === listenLang)?.native || listenLang} में सुन रहे हैं · Prisma v3.0`,
+                          `Listening in ${SUPPORTED_LANGUAGES.find((l) => l.code === listenLang)?.label || listenLang} on Prisma v3.0`,
+                          `${listenLang === "hi-en" ? "Hinglish" : SUPPORTED_LANGUAGES.find((l) => l.code === listenLang)?.native || listenLang} में सुन रहे हैं, Prisma v3.0`,
                         )
                       : "")}
             </p>
@@ -2556,8 +2503,8 @@ export default function Home() {
               {replies.length === 0 ? (
                 <p className="chip-empty">
                   {t(
-                    "No suggestions yet — start listening, then tap refresh.",
-                    "अभी कोई सुझाव नहीं — सुनना शुरू करें, फिर रीफ़्रेश पर टैप करें।",
+                    "No suggestions yet. Start listening, then tap refresh.",
+                    "अभी कोई सुझाव नहीं। सुनना शुरू करें, फिर रीफ़्रेश पर टैप करें।",
                   )}
                 </p>
               ) : (
@@ -2668,7 +2615,8 @@ export default function Home() {
 
           {dockVisible && (
             <div className="dock" role="region" aria-label={t("Reply dock", "जवाब डॉक")}>
-              <div className="dock-inner">
+              <div className="dock-shell">
+                <div className="dock-inner">
                 <button
                   type="button"
                   className={`dock-mic ${listening ? "live" : ""}`}
@@ -2695,7 +2643,7 @@ export default function Home() {
                   >
                     {SUPPORTED_LANGUAGES.map((l) => (
                       <option key={l.code} value={l.code}>
-                        {l.short} · {l.label}
+                        {l.short} {l.label}
                       </option>
                     ))}
                   </select>
@@ -2735,11 +2683,14 @@ export default function Home() {
                 >
                   <SendIcon />
                 </button>
+                </div>
               </div>
             </div>
           )}
         </div>
       )}
+          </div>
+        </div>
       </div>
     </main>
   );
