@@ -129,18 +129,6 @@ def tts_cache_key(text: str, voice: str, emotion: str, model: str) -> str:
     return hashlib.sha256(raw).hexdigest()
 
 
-# TODO: vachana-vc-v1 (docs.gnani.ai/api/VC/vc-inference) has no emotion field.
-# Timbre v3.0 tags are inline in `text` and documented as timbre-v3.0 only
-# (docs.gnani.ai/api/TTS/tts-audio-tags). Names confirmed in examples:
-# <laugh> <giggle> <whispers> <shouting> <pauses>
-# Catalog table HTML was stripped; do not invent tags. Clone path uses plain text.
-TIMBRE_EMOTION_PREFIX = {
-    "warm": "",
-    "urgent": "<shouting> ",
-    "playful": "<giggle> ",
-    "calm": "<whispers> ",
-}
-
 # Timbre v2.5 keeps its own voice catalog: a v3.0 voice such as Shivani is
 # rejected with 400, and each v2.5 voice has one preferred language. These are
 # the documented pairings used when no cloned voice is active.
@@ -300,20 +288,18 @@ class GnaniClient:
             synth_text = clean
             sample_rate = settings.clone_tts_sample_rate
         else:
-            model = settings.stock_tts_model
-            if model == "timbre-v2.5":
-                # v2.5 has one preferred language per voice. "auto" is resolved
-                # from the script so the voice and language always agree.
-                resolved = language
-                if resolved not in TIMBRE_V25_VOICES:
-                    resolved = "hi-IN" if has_devanagari(clean) else "en-IN"
-                voice_id = TIMBRE_V25_VOICES[resolved]
-                language = resolved
-                prefix = ""
-            else:
-                voice_id = settings.stock_voice
-                prefix = TIMBRE_EMOTION_PREFIX.get(emotion, "")
-            synth_text = f"{prefix}{clean}" if prefix else clean
+            # Project requirement: stock speech must use Timbre v2.5. Pinned in
+            # code so a stale STOCK_TTS_MODEL=timbre-v3.0 env var on the host
+            # cannot silently downgrade the deployment.
+            model = "timbre-v2.5"
+            # v2.5 has one preferred language per voice. "auto" is resolved
+            # from the script so the voice and language always agree.
+            resolved = language
+            if resolved not in TIMBRE_V25_VOICES:
+                resolved = "hi-IN" if has_devanagari(clean) else "en-IN"
+            voice_id = TIMBRE_V25_VOICES[resolved]
+            language = resolved
+            synth_text = clean
             sample_rate = settings.stock_tts_sample_rate
 
         key = tts_cache_key(synth_text, voice_id, emotion, model)

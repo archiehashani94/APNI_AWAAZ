@@ -92,7 +92,7 @@ There is no fine-tuning step. Accuracy comes from enabling the real model, a tas
 
 ## Favourites
 
-The default list is served by `GET /api/favourites`. Users can add their own phrases in the Favourites card; custom entries are stored in `localStorage` (`aa_custom_favourites`) and can be removed with the × button. Each phrase carries an emotion used by the stock-voice fallback.
+The default list is served by `GET /api/favourites`. Users can add their own phrases in the Favourites card; custom entries are stored in `localStorage` (`aa_custom_favourites`) and can be removed with the × button. Each phrase carries an emotion label; cloned speech ignores it, and Timbre v2.5 has no emotion field.
 
 ## Voice quality notes
 

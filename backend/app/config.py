@@ -16,9 +16,6 @@ class Settings(BaseSettings):
     gnani_base_url: str = "https://api.vachana.ai"
     gnani_stt_ws: str = "wss://api.vachana.ai/stt/v3/stream"
     credit_budget: float = 5000.0
-    # Timbre v2.5 has its own voice catalog; Shivani is a v3.0-only voice.
-    stock_voice: str = "Nalini"
-    stock_tts_model: str = "timbre-v2.5"
     cors_origins: str = "*"
     llm_provider: str = "canned"
     llm_api_key: str = ""

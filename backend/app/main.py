@@ -185,8 +185,8 @@ def health() -> dict[str, Any]:
         "llm_model": settings.llm_model or None,
         "has_llm_key": bool(settings.llm_api_key),
         "stt_model": "prisma-v2.5",
-        "tts_model": settings.stock_tts_model,
-        "stock_voice": settings.stock_voice,
+        "tts_model": "timbre-v2.5",
+        "stock_voice": "per-language v2.5 voices",
         "stt_language": settings.stt_language,
         "clone_tts_sample_rate": settings.clone_tts_sample_rate,
     }

@@ -69,7 +69,7 @@ def main() -> int:
     # An invalid model is rejected after authentication, before synthesis.
     body = {
         "text": "hi",
-        "voice": settings.stock_voice,
+        "voice": "Nalini",
         "model": "__auth_check__",
         "audio_config": {
             "sample_rate": 8000,
