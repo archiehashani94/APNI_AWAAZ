@@ -141,6 +141,28 @@ TIMBRE_EMOTION_PREFIX = {
     "calm": "<whispers> ",
 }
 
+# Timbre v2.5 keeps its own voice catalog: a v3.0 voice such as Shivani is
+# rejected with 400, and each v2.5 voice has one preferred language. These are
+# the documented pairings used when no cloned voice is active.
+TIMBRE_V25_VOICES = {
+    "hi-IN": "Nalini",
+    "en-IN": "Kaveri",
+    "hi-en": "Poorvi",
+    "ta-IN": "Noopur",
+    "te-IN": "Suhana",
+    "kn-IN": "Saanvi",
+    "ml-IN": "Reshma",
+    "mr-IN": "Zahira",
+    "bn-IN": "Kirra",
+    "gu-IN": "Falak",
+    "pa-IN": "Mehuli",
+}
+
+
+def has_devanagari(text: str) -> bool:
+    return any("\u0900" <= ch <= "\u097f" for ch in text)
+
+
 _TRAILING_PUNCT = ".!?;:।॥…"
 _TRAILING_BRACKETS = "\"'”’»"
 
@@ -159,7 +181,7 @@ def natural_text(text: str) -> str:
         closing = clean[-1] + closing
         clean = clean[:-1].rstrip()
     if clean and clean[-1] not in _TRAILING_PUNCT:
-        clean += "।" if any("\u0900" <= ch <= "\u097f" for ch in clean) else "."
+        clean += "।" if has_devanagari(clean) else "."
     return f"{clean}{closing}"
 
 
@@ -279,8 +301,18 @@ class GnaniClient:
             sample_rate = settings.clone_tts_sample_rate
         else:
             model = settings.stock_tts_model
-            voice_id = settings.stock_voice
-            prefix = TIMBRE_EMOTION_PREFIX.get(emotion, "")
+            if model == "timbre-v2.5":
+                # v2.5 has one preferred language per voice. "auto" is resolved
+                # from the script so the voice and language always agree.
+                resolved = language
+                if resolved not in TIMBRE_V25_VOICES:
+                    resolved = "hi-IN" if has_devanagari(clean) else "en-IN"
+                voice_id = TIMBRE_V25_VOICES[resolved]
+                language = resolved
+                prefix = ""
+            else:
+                voice_id = settings.stock_voice
+                prefix = TIMBRE_EMOTION_PREFIX.get(emotion, "")
             synth_text = f"{prefix}{clean}" if prefix else clean
             sample_rate = settings.stock_tts_sample_rate
 
@@ -311,7 +343,7 @@ class GnaniClient:
                 "dtype": speaker_embedding.get("dtype", "torch.bfloat16"),
             }
         else:
-            body["voice"] = settings.stock_voice
+            body["voice"] = voice_id
             body["language"] = language
             body["speed"] = 1.0
 
@@ -426,20 +458,21 @@ class GnaniClient:
         pcm_iter: AsyncIterator[bytes | str],
         *,
         sample_rate: int = 16000,
-        language: str = "indic-auto",
+        language: str = "en-IN",
         output_format: str = "verbatim",
     ) -> AsyncIterator[dict[str, Any]]:
         import asyncio
 
         estimated = 20.0
         self._guard(estimated)
-        # Prisma accepts exactly one locale in ``language_code``. If an older
-        # client still sends a comma list, use its first locale instead of
-        # letting the stream fail with a policy-violation error.
-        language_code = (language.split(",")[0] or "indic-auto").strip()
+        # Prisma v2.5 is the required model here. It takes one concrete locale
+        # per session and only the verbatim/transcribe output styles.
+        if output_format not in {"verbatim", "transcribe"}:
+            output_format = "verbatim"
+        language_code = (language.split(",")[0] or "en-IN").strip()
         headers = {
             "x-api-key-id": settings.gnani_api_key,
-            "model": "prisma-v3.0",
+            "model": "prisma-v2.5",
             "language_code": language_code,
             "x-sample-rate": str(sample_rate),
             "x-idle-timeout-sec": str(settings.stt_idle_timeout_sec),

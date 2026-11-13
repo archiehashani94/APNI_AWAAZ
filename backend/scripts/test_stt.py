@@ -1,4 +1,4 @@
-"""POST /stt/v3 Prisma v3.0 REST (short clip). Live WS is exercised by the app."""
+"""POST /stt/v3 Prisma v2.5 REST (short clip). Live WS is exercised by the app."""
 
 from __future__ import annotations
 
@@ -28,7 +28,7 @@ def main() -> int:
             f"{settings.gnani_base_url}/stt/v3",
             headers={"X-API-Key-ID": settings.gnani_api_key},
             files={"audio_file": (path.name, handle, "audio/wav")},
-            data={"model": "prisma-v3.0", "language_code": "indic-auto"},
+            data={"model": "prisma-v2.5", "language_code": "hi-IN"},
             timeout=60.0,
         )
     gnani._record("stt-rest", 20.0, headers=response.headers)  # noqa: SLF001

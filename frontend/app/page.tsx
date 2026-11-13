@@ -406,7 +406,6 @@ export default function Home() {
   const [fallbacks, setFallbacks] = useState<string[]>([]);
   const [listenState, setListenState] = useState<ListenState>("idle");
   const [listenLang, setListenLang] = useState("en-IN");
-  const [speakLang, setSpeakLang] = useState("auto");
   const [userGender, setUserGender] = useState<"neutral" | "female" | "male">("neutral");
   const [recState, setRecState] = useState<RecState>("idle");
   const [recLevel, setRecLevel] = useState(0);
@@ -1948,7 +1947,18 @@ export default function Home() {
         const res = await api("/api/speak", sessionId, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ text: clean, emotion: emo, language: speakLang }),
+          body: JSON.stringify({
+            text: clean,
+            emotion: emo,
+            // Timbre v2.5 has one preferred language per stock voice, so send
+            // the language of the text instead of "auto".
+            language:
+              contentLang === "hinglish"
+                ? "hi-en"
+                : contentLang === "hi"
+                  ? "hi-IN"
+                  : "en-IN",
+          }),
         });
         if (!res.ok) {
           const detail: { detail?: string } = await res.json().catch(() => ({}));
@@ -2627,8 +2637,8 @@ export default function Home() {
                   : status ||
                     (listenState === "live"
                       ? t(
-                          `Listening in ${SUPPORTED_LANGUAGES.find((l) => l.code === listenLang)?.label || listenLang} on Prisma v3.0`,
-                          `${listenLang === "hi-en" ? "Hinglish" : SUPPORTED_LANGUAGES.find((l) => l.code === listenLang)?.native || listenLang} में सुन रहे हैं, Prisma v3.0`,
+                          `Listening in ${SUPPORTED_LANGUAGES.find((l) => l.code === listenLang)?.label || listenLang} on Prisma v2.5`,
+                          `${listenLang === "hi-en" ? "Hinglish" : SUPPORTED_LANGUAGES.find((l) => l.code === listenLang)?.native || listenLang} में सुन रहे हैं, Prisma v2.5`,
                         )
                       : "")}
             </p>

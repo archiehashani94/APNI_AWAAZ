@@ -16,8 +16,9 @@ class Settings(BaseSettings):
     gnani_base_url: str = "https://api.vachana.ai"
     gnani_stt_ws: str = "wss://api.vachana.ai/stt/v3/stream"
     credit_budget: float = 5000.0
-    stock_voice: str = "Shivani"
-    stock_tts_model: str = "timbre-v3.0"
+    # Timbre v2.5 has its own voice catalog; Shivani is a v3.0-only voice.
+    stock_voice: str = "Nalini"
+    stock_tts_model: str = "timbre-v2.5"
     cors_origins: str = "*"
     llm_provider: str = "canned"
     llm_api_key: str = ""
@@ -32,8 +33,9 @@ class Settings(BaseSettings):
     clone_tts_sample_rate: int = 44100
     stock_tts_sample_rate: int = 48000
 
-    # Live Prisma v3.0 streaming. Tune VAD for a browser microphone.
-    stt_language: str = "indic-auto"
+    # Live Prisma v2.5 streaming. v2.5 needs one concrete locale; en-IN also
+    # accepts Hindi-English mixed audio and returns Latin script (Hinglish).
+    stt_language: str = "en-IN"
     stt_format: str = "verbatim"
     stt_vad_threshold: float = 0.50
     stt_min_speech_ms: int = 80

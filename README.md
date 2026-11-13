@@ -52,12 +52,25 @@ python scripts/test_stt.py --audio path\to\speech.wav
 
 - Clone embeddings: `POST /api/v1/tts/voice-clone/embeddings`
 - Clone speak: `POST /api/v1/tts/inference` with `model: vachana-vc-v1` and `speaker_embedding` (`embedding`, `shape`, `dtype`)
-- Stock fallback: Timbre `timbre-v3.0` voice `Shivani`
-- **TODO:** `vachana-vc-v1` has no documented emotion field. Timbre v3 tags (`<whispers>`, `<shouting>`, `<giggle>`, `<pauses>`, `<laugh>`) are `timbre-v3.0` only. Clone synthesis uses plain text. UI emotions still tag replies and Timbre fallback.
+- Stock fallback: Timbre `timbre-v2.5` (voice chosen per language: `Nalini` hi-IN, `Kaveri` en-IN, `Poorvi` hi-en, plus one documented voice for each other Indic locale)
+- **TODO:** `vachana-vc-v1` has no documented emotion field. Timbre v3 tags (`<whispers>`, `<shouting>`, `<giggle>`, `<pauses>`, `<laugh>`) are `timbre-v3.0` only and are not sent to `timbre-v2.5`. Clone synthesis uses plain text.
 
 ## Reply suggestions (LLM)
 
-The three tappable replies come from an OpenAI-compatible Chat Completions endpoint. **`LLM_PROVIDER=canned` disables the LLM and always returns fixed lines**, so replies feel unrelated to the partner. Set any other name to enable it:
+The three tappable replies come from an OpenAI-compatible Chat Completions endpoint. **`LLM_PROVIDER=canned` disables the LLM and always returns fixed lines**, so replies feel unrelated to the partner. Set any other name to enable it.
+
+The required reasoning model for this project is **Evon v3.3**. It is in Gnani's closed beta, so it needs the base URL and model id from the beta onboarding (or a self-hosted vLLM/SGLang endpoint serving `gnani/gnani-evon-v3.3-30B-A3B`):
+
+```dotenv
+LLM_PROVIDER=evon
+LLM_CHAT_URL=https://<evon-beta-host>/v1/chat/completions
+LLM_MODEL=<evon-v3.3-model-id>
+LLM_API_KEY=<gnani-beta-key>
+```
+
+`GET /health` reports `llm_provider`, `llm_model`, `stt_model`, `tts_model`, and `stock_voice`, so you can confirm which models the deployed backend loaded. The speech key currently has no LLM scope: calling a chat endpoint with it returns `403 SCOPE_NOT_ALLOWED`, so Evon needs a beta key or a self-hosted endpoint.
+
+Gemini remains a drop-in fallback while Evon access is pending:
 
 ```dotenv
 LLM_PROVIDER=gemini
@@ -135,7 +148,7 @@ The script prints only the key's length, last 4 characters, and a SHA-256 prefix
 
 ## Live listening notes
 
-- Prisma v3.0 requires raw mono PCM16 audio in **exactly 1,024-byte frames**, sent at roughly 32 ms cadence. The frontend downsamples the microphone to 16 kHz and paces frames from a timer rather than sending audio-callback bursts.
+- Prisma v2.5 requires raw mono PCM16 audio in **exactly 1,024-byte frames**, sent at roughly 32 ms cadence. The frontend downsamples the microphone to 16 kHz and paces frames from a timer rather than sending audio-callback bursts.
 - The microphone stream is explicitly stopped when listening ends.
 - If Prisma cannot connect or the stream drops, the app falls back to browser `SpeechRecognition` (Chrome/Edge). Browser transcripts are sent to the backend and included in suggestion turns even if the WebSocket is down.
 - Streaming sessions are capped by Gnani at 15 minutes. The backend requests a 300-second idle timeout.
@@ -150,8 +163,8 @@ The script prints only the key's length, last 4 characters, and a SHA-256 prefix
 | `MAX_UPLOAD_MB` | `10` | Upload size cap |
 | `CLONE_TTS_SAMPLE_RATE` | `44100` | Cloned TTS output rate |
 | `STOCK_TTS_SAMPLE_RATE` | `48000` | Stock Timbre output rate |
-| `STT_LANGUAGE` | `indic-auto` | Default Prisma language |
-| `STT_FORMAT` | `verbatim` | `verbatim`, `transcribe`, `codemix`, or `transliterate` |
+| `STT_LANGUAGE` | `en-IN` | Default Prisma locale (`en-IN` also handles Hindi-English mixed audio) |
+| `STT_FORMAT` | `verbatim` | `verbatim` or `transcribe` (Prisma v2.5) |
 
-- Prisma live STT: `wss://api.vachana.ai/stt/v3/stream`, headers `x-api-key-id`, `model: prisma-v3.0`, `language_code: indic-auto`, 16 kHz PCM16
+- Prisma live STT: `wss://api.vachana.ai/stt/v3/stream`, headers `x-api-key-id`, `model: prisma-v2.5`, one `language_code` per session, 16 kHz PCM16. Hinglish uses `en-IN`, which accepts mixed Hindi-English audio and returns Latin script.
 - Swap the LLM in **one file:** `backend/app/llm/provider.py`. `LLM_PROVIDER=canned` (or empty) uses canned replies and never 503s.

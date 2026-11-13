@@ -82,7 +82,6 @@ STT_LANGUAGES = {
     "bn-IN",
     "gu-IN",
 }
-STT_FORMATS = {"verbatim", "transcribe", "codemix", "transliterate"}
 
 
 def normalized_language(
@@ -183,7 +182,11 @@ def health() -> dict[str, Any]:
         "gnani_key_tail": key[-4:] if key else None,
         "gnani_key_sha256_10": hashlib.sha256(key.encode()).hexdigest()[:10] if key else None,
         "llm_provider": settings.llm_provider or "canned",
+        "llm_model": settings.llm_model or None,
         "has_llm_key": bool(settings.llm_api_key),
+        "stt_model": "prisma-v2.5",
+        "tts_model": settings.stock_tts_model,
+        "stock_voice": settings.stock_voice,
         "stt_language": settings.stt_language,
         "clone_tts_sample_rate": settings.clone_tts_sample_rate,
     }
@@ -686,18 +689,16 @@ async def listen(websocket: WebSocket) -> None:
         websocket.query_params.get("language"),
         STT_LANGUAGES,
         settings.stt_language,
-        allow_list=True,
     )
-    # Hinglish is Hindi speech written in Latin script. Prisma has no
-    # dedicated locale for it, so listen in Hindi and transliterate the output.
-    hinglish = language == "hi-en"
-    if hinglish:
-        language = "hi-IN"
-    output_format = websocket.query_params.get("format") or (
-        "transliterate" if hinglish else settings.stt_format
-    )
-    if output_format not in STT_FORMATS:
-        output_format = settings.stt_format
+    # Prisma v2.5 has no automatic language detection and no hi-en locale.
+    # en-IN accepts Hindi-English mixed audio and returns Latin script, which
+    # is exactly what Hinglish mode needs.
+    if language in {"indic-auto", "hi-en"}:
+        language = "en-IN"
+    output_format = websocket.query_params.get("format") or settings.stt_format
+    # codemix/transliterate are Prisma v3.0 styles; v2.5 accepts these two.
+    if output_format not in {"verbatim", "transcribe"}:
+        output_format = "verbatim"
     queue: asyncio.Queue[bytes | str | None] = asyncio.Queue()
 
     async def pcm_iter() -> AsyncIterator[bytes | str]:
@@ -754,7 +755,7 @@ async def listen(websocket: WebSocket) -> None:
         await websocket.send_json(
             {
                 "type": "ready",
-                "engine": "prisma-v3.0",
+                "engine": "prisma-v2.5",
                 "language": language,
                 "format": output_format,
             }

@@ -13,6 +13,6 @@ services:
       - key: CORS_ORIGINS
         sync: false
       - key: STOCK_VOICE
-        value: Shivani
+        value: Nalini
       - key: STOCK_TTS_MODEL
-        value: timbre-v3.0
+        value: timbre-v2.5
